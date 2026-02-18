@@ -1,0 +1,73 @@
+#!/usr/bin/env -S just -f
+# nx-git: Git workflow commands
+
+export JUST_JUSTFILE := justfile()
+
+# List all commands
+default:
+    @just --list
+
+# Cherry-pick commits from a branch, resetting author to current user while preserving dates
+reclaim branch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    CURRENT_USER="$(git config user.name)"
+    CURRENT_EMAIL="$(git config user.email)"
+
+    commits=$(git rev-list --reverse HEAD..{{branch}})
+
+    if [ -z "$commits" ]; then
+        echo "No commits to reclaim from {{branch}}"
+        exit 0
+    fi
+
+    count=$(echo "$commits" | wc -l | tr -d ' ')
+    echo "Reclaiming $count commit(s) from {{branch}} as $CURRENT_USER <$CURRENT_EMAIL>"
+    echo ""
+
+    for commit in $commits; do
+        author_date=$(git log -1 --format="%aI" "$commit")
+        commit_date=$(git log -1 --format="%cI" "$commit")
+        subject=$(git log -1 --format="%s" "$commit")
+
+        echo "  cherry-pick: $subject"
+
+        git cherry-pick "$commit" --no-commit
+        GIT_AUTHOR_DATE="$author_date" GIT_COMMITTER_DATE="$commit_date" \
+            git commit --author="$CURRENT_USER <$CURRENT_EMAIL>" -C "$commit"
+    done
+
+    echo ""
+    echo "Done! Reclaimed $count commit(s)."
+
+# Stage files and commit with message (validates clean tree)
+commit message +files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate no staged changes exist
+    if ! git -C "$NH_FLAKE" diff --cached --quiet; then
+        echo "error: staged changes already exist" >&2
+        exit 1
+    fi
+
+    # Stage the specified files
+    git -C "$NH_FLAKE" add {{files}}
+
+    # Validate no other unstaged changes remain
+    if ! git -C "$NH_FLAKE" diff --quiet; then
+        echo "error: unstaged changes exist outside of specified files" >&2
+        git -C "$NH_FLAKE" reset HEAD -- {{files}} >/dev/null
+        exit 1
+    fi
+
+    # Validate no untracked files exist
+    if [ -n "$(git -C "$NH_FLAKE" ls-files --others --exclude-standard)" ]; then
+        echo "error: untracked files exist" >&2
+        git -C "$NH_FLAKE" reset HEAD -- {{files}} >/dev/null
+        exit 1
+    fi
+
+    # Commit with the provided message
+    git -C "$NH_FLAKE" commit -m "{{message}}"

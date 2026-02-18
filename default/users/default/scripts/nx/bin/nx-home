@@ -1,0 +1,16 @@
+#!/usr/bin/env -S just -f
+# nx-home: Home Manager management
+
+export JUST_JUSTFILE := justfile()
+
+# List all commands
+default:
+    @just --list
+
+# Build home configuration
+build *args:
+    nh home build {{args}}
+
+# Switch to new home configuration
+switch *args:
+    nh home switch {{args}}

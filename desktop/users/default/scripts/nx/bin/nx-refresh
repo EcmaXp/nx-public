@@ -1,0 +1,8 @@
+#!/usr/bin/env fish
+nx sync
+and nx os switch
+and nx home switch
+and brew upgrade
+and brew update
+and nx mise upgrade
+and nx clean

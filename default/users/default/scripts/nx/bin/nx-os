@@ -1,0 +1,35 @@
+#!/usr/bin/env -S just -f
+# nx-os: NixOS/Darwin system management
+
+export JUST_JUSTFILE := justfile()
+
+# List all commands
+default:
+    @just --list
+
+# Build system configuration
+build *args:
+    #!/usr/bin/env fish
+    if test (uname) = "Linux"
+        nh os build {{args}}
+    else
+        nh darwin build {{args}}
+    end
+
+# Switch to new system configuration
+switch *args:
+    #!/usr/bin/env fish
+    if test (uname) = "Linux"
+        nh os switch {{args}}
+    else
+        nh darwin switch {{args}}
+    end
+
+# Test system configuration
+test *args:
+    #!/usr/bin/env fish
+    if test (uname) = "Linux"
+        nh os test {{args}}
+    else
+        nh darwin test {{args}}
+    end
