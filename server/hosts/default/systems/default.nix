@@ -1,0 +1,6 @@
+{ platform, ... }:
+{
+  imports = [
+    ./${platform}
+  ];
+}

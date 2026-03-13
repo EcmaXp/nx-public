@@ -1,0 +1,12 @@
+#!/usr/bin/env fish
+nh clean all
+nix store optimise
+
+if type -q mise
+    mise cache clear
+    mise prune --yes
+end
+
+if type -q brew
+    brew cleanup
+end

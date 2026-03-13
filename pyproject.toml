@@ -1,0 +1,31 @@
+[project]
+name = "nx"
+version = "1"
+description = "EcmaXp's nx"
+authors = [{ name = "EcmaXp" }]
+requires-python = ">= 3.14"
+classifiers = ["Private :: Do not Upload"]
+
+[project.urls]
+Repository = "https://github.com/EcmaXp/nx-public"
+
+[tool.uv.workspace]
+members = ["desktop/users/default/scripts/nx"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "I",   # isort
+]
+ignore = [
+    "B020", # loop-variable-overrides-iterator
+    "E501", # line-too-long
+]
