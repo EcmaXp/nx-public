@@ -1,0 +1,4 @@
+[submodule "AeroSpace"]
+	path = desktop/users/default/packages/custom/AeroSpace
+	url = https://github.com/ryanmeisters/AeroSpace.git
+	branch = rhm/macos-native-tab-fix

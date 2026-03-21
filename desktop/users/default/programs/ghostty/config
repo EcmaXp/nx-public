@@ -1,0 +1,99 @@
+# https://github.com/ghostty-org/ghostty
+# https://ghostty.org/docs/config
+
+font-family = Jetbrains Mono
+font-family-bold =
+font-family-italic =
+font-family-bold-italic =
+font-size = 18
+
+background = #000000
+
+selection-background = #c1ddff
+
+mouse-shift-capture = true
+mouse-scroll-multiplier = precision:1,discrete:1
+
+background-opacity = 0.75
+background-blur = 80
+
+command =
+
+keybind = alt+left=esc:b
+keybind = alt+right=esc:f
+keybind = super+shift+page_up=adjust_selection:page_up
+keybind = super+shift+page_down=adjust_selection:page_down
+keybind = super+shift+home=adjust_selection:home
+keybind = super+shift+end=adjust_selection:end
+keybind = alt+shift+left=adjust_selection:left
+keybind = alt+shift+right=adjust_selection:right
+keybind = alt+shift+up=adjust_selection:up
+keybind = alt+shift+down=adjust_selection:down
+keybind = super+c=copy_to_clipboard
+keybind = super+9=goto_tab:9
+keybind = super+0=last_tab
+keybind = super+zero=reset_font_size
+keybind = super+minus=decrease_font_size:1
+keybind = super+plus=increase_font_size:1
+keybind = super+equal=increase_font_size:1
+keybind = super+comma=open_config
+keybind = super+left_bracket=goto_split:previous
+keybind = super+right_bracket=goto_split:next
+keybind = super+left=text:\x01
+keybind = super+right=text:\x05
+keybind = super+up=jump_to_prompt:-1
+keybind = super+down=jump_to_prompt:1
+keybind = super+ctrl+left=resize_split:left,10
+keybind = super+ctrl+right=resize_split:right,10
+keybind = super+ctrl+up=resize_split:up,10
+keybind = super+ctrl+down=resize_split:down,10
+keybind = super+alt+shift+j=write_scrollback_file:open
+keybind = super+shift+j=write_scrollback_file:paste
+keybind = super+shift+comma=reload_config
+keybind = super+shift+left_bracket=previous_tab
+keybind = super+shift+right_bracket=next_tab
+keybind = super+shift+up=jump_to_prompt:-1
+keybind = super+shift+down=jump_to_prompt:1
+
+keybind = ctrl+left=goto_split:left
+keybind = ctrl+right=goto_split:right
+keybind = ctrl+up=goto_split:top
+keybind = ctrl+down=goto_split:bottom
+keybind = ctrl+enter=toggle_split_zoom
+keybind = unconsumed:ctrl+c=copy_to_clipboard
+keybind = ctrl+home=new_split:left
+keybind = ctrl+end=new_split:right
+keybind = ctrl+page_up=new_split:up
+keybind = ctrl+page_down=new_split:down
+keybind = ctrl+alt+enter=equalize_splits
+keybind = ctrl+alt+left=previous_tab
+keybind = ctrl+alt+right=next_tab
+
+keybind = unconsumed:home=scroll_to_top
+keybind = unconsumed:end=scroll_to_bottom
+keybind = unconsumed:page_up=scroll_page_up
+keybind = unconsumed:page_down=scroll_page_down
+
+keybind = global:super+ctrl+alt+shift+c=toggle_quick_terminal
+
+keybind = shift+enter=text:\n
+
+window-padding-balance = true
+window-padding-color = extend
+
+resize-overlay = never
+
+copy-on-select = false
+
+click-repeat-interval = 0
+
+confirm-close-surface = false
+
+quick-terminal-animation-duration = 0
+
+shell-integration-features = cursor,sudo,title
+
+macos-option-as-alt = true
+
+auto-update = download
+auto-update-channel =

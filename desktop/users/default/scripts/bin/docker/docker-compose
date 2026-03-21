@@ -1,0 +1,2 @@
+#!/usr/bin/env fish
+exec docker compose $argv

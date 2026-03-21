@@ -1,0 +1,19 @@
+# dotenv
+.env
+
+# Cache
+.cache/
+
+# Python
+__pycache__/
+.venv/
+
+# Linux
+*~
+
+# macOS
+.DS_Store
+
+# NixOS
+/configuration.nix
+/result

@@ -1,0 +1,231 @@
+// Zed settings: https://zed.dev/docs/configuring-zed
+{
+  "base_keymap": "JetBrains",
+  "theme": {
+    "mode": "system",
+    "light": "Ayu Light",
+    "dark": "Ayu Dark"
+  },
+  "autosave": "on_focus_change",
+  "ui_font_family": "JetBrains Mono",
+  "ui_font_size": 14.0,
+  "buffer_font_family": "JetBrains Mono",
+  "buffer_font_size": 14.0,
+  "buffer_line_height": {
+    "custom": 1.5
+  },
+  "soft_wrap": "editor_width",
+  "auto_indent_on_paste": false,
+  "cursor_blink": true,
+  "minimap": {
+    "show": "always",
+    "thumb": "hover",
+    "thumb_border": "full",
+    "current_line_highlight": "line"
+  },
+  "terminal": {
+    "detect_venv": {
+      "on": {
+        "activate_script": "fish"
+      }
+    },
+    "dock": "bottom",
+    "blinking": "on",
+    "line_height": {
+      "custom": 1.5
+    },
+    "max_scroll_history_lines": 100000
+  },
+  "preview_tabs": {
+    "enable_preview_from_file_finder": true
+  },
+  "journal": {
+    "path": "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian",
+    "hour_format": "hour24"
+  },
+  "redact_private_values": true,
+  "private_files": [
+    "**/*.env*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.cert",
+    "**/*.crt",
+    "**/*.age",
+    "**/kubeconfig",
+    "**/talosconfig",
+    "**/secrets/identities/**",
+    "**/secrets.yml"
+  ],
+  "file_scan_exclusions": [
+    "**/.git",
+    "**/.svn",
+    "**/.hg",
+    "**/CVS",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+    "**/.classpath",
+    "**/.settings",
+    "**/__pycache__",
+    "**/.ruff_cache"
+  ],
+  "features": {
+    "edit_prediction_provider": "zed"
+  },
+  "edit_predictions": {
+    "disabled_globs": [
+      "**/*.env*",
+      "**/*.pem",
+      "**/*.key",
+      "**/*.cert",
+      "**/*.crt",
+      "**/*.age",
+      "**/secrets/identities/**",
+      "**/*history*",
+      "**/secrets.yml",
+      "**/kubeconfig",
+      "**/talosconfig",
+      "**/*.tfstate",
+      "**/*.toml",
+      "**/*.txt",
+      "**/*.md"
+    ]
+  },
+  "agent": {
+    "default_profile": "write",
+    "default_model": {
+      "provider": "openai",
+      "model": "o4-mini"
+    },
+    "inline_assistant_model": {
+      "provider": "copilot_chat",
+      "model": "o4-mini"
+    },
+    "button": true,
+    "enabled": true
+  },
+  "inlay_hints": {
+    "enabled": true
+  },
+  "show_edit_predictions": true,
+  "file_types": {
+    "JSONC": [
+      "**/.zed/**/*.json",
+      "**/zed/**/*.json",
+      "**/Zed/**/*.json",
+      "**/.vscode/**/*.json",
+      "tsconfig*.json",
+      "**/*.json5"
+    ],
+    "Shell Script": [".env.*", ".envrc"]
+  },
+  "languages": {
+    "TOML": {
+      "show_edit_predictions": false,
+      "format_on_save": "off"
+    },
+    "Plain Text": {
+      "show_edit_predictions": false,
+      "format_on_save": "off"
+    },
+    "Markdown": {
+      "show_edit_predictions": false,
+      "format_on_save": "off"
+    },
+    "Python": {
+      "show_edit_predictions": true,
+      // https://github.com/zed-industries/community/discussions/1124
+      // https://docs.astral.sh/ruff/editors/setup/#zed
+      // https://docs.astral.sh/ruff/linter/
+      "language_servers": ["pyright", "ruff"],
+      "format_on_save": "on",
+      "formatter": [
+        { "code_action": "source.organizeImports.ruff" },
+        { "code_action": "source.fixAll.ruff" },
+        {
+          "language_server": {
+            "name": "ruff"
+          }
+        }
+      ]
+    },
+    "Terraform": {
+      "format_on_save": "on",
+      "formatter": {
+        "external": {
+          "command": "terraform",
+          "arguments": ["fmt", "-"]
+        }
+      }
+    },
+    "YAML": {
+      "enable_language_server": false,
+      "format_on_save": "off"
+    },
+    "Nix": {
+      "tab_size": 2
+    },
+    "Swift": {
+      "format_on_save": "off"
+    }
+  },
+  "lsp": {
+    "ruff": {
+      "initialization_options": {
+        "settings": {
+          "lineLength": 88,
+          "lint": {
+            "extendSelect": ["I"]
+          }
+        }
+      }
+    },
+    "rust-analyzer": {
+      "initialization_options": {
+        "checkOnSave": {
+          "command": "clippy"
+        }
+      }
+    },
+    "nil": {
+      "initialization_options": {
+        "formatting": {
+          "command": ["nixfmt"]
+        },
+        "nix": {
+          "flake": {
+            "autoArchive": true
+          }
+        }
+      }
+    }
+  },
+  "language_models": {
+    "openai": {}
+  },
+  "jupyter": {
+    "enabled": true
+  },
+  "git": {
+    "inline_blame": {
+      "enabled": false
+    }
+  },
+  "tabs": {
+    "file_icons": true,
+    "git_status": true
+  },
+  "project_panel": {
+    "auto_fold_dirs": true
+  },
+  "collaboration_panel": {
+    "button": false
+  },
+  "notification_panel": {
+    "button": false
+  },
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false
+  },
+  "ssh_connections": []
+}

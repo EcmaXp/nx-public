@@ -1,0 +1,226 @@
+keyboard:
+  shortcuts:
+    # System
+    Hyper Key:
+      f19:
+        parameters: &held_down
+          basic.to_if_held_down_threshold_milliseconds: 0
+        to_if_alone: f20
+        to_if_held_down: hyper
+      hyper-cmd: &hyper_cmd
+        parameters: *held_down
+        to_if_held_down: rctrl-ralt-rshift
+        to_after_key_up: hyper
+      hyper-ctrl: &hyper_ctrl
+        parameters: *held_down
+        to_if_held_down: rcmd-ralt-rshift
+        to_after_key_up: hyper
+      hyper-alt: &hyper_alt
+        parameters: *held_down
+        to_if_held_down: rcmd-rctrl-rshift
+        to_after_key_up: hyper
+      hyper-shift: &hyper_shift
+        parameters: *held_down
+        to_if_held_down: rcmd-rctrl-ralt
+        to_after_key_up: hyper
+      hyper-fn: &hyper_fn
+        parameters: *held_down
+        to_if_held_down: hyper-fn
+        to_after_key_up: hyper
+      cmd-f19: *hyper_cmd
+      ctrl-f19: *hyper_ctrl
+      alt-f19: *hyper_alt
+      shift-f19: *hyper_shift
+      fn-f19: *hyper_fn
+    # Terminal
+    Terminal, iTerm:
+      cmd-left: alt-b
+      cmd-right: alt-f
+      alt-left: ctrl-a
+      alt-right: ctrl-e
+    Terminal, Ghostty:
+      cmd-delete_or_backspace: ctrl-delete_or_backspace
+    # Editor
+    Editor, JetBrains:
+      shift*cmd-left_right: alt-left_right
+      alt-shift-up_down: cmd-shift-up_down
+      cmd-up_down: cmd-up_down
+      cmd-shift-down: alt-j
+      cmd-shift-up: shift-alt-j
+      alt-down: alt-f
+      alt-up: shift-alt-f
+      ctrl-up_down: ctrl-shift-up_down
+      ctrl-shift-up_down: alt-up_down
+      cmd-alt-shift-down: shift-cmd-alt-j
+      cmd-alt-shift-up: escape
+      cmd-shift-enter: ctrl-t
+    Editor, VSCode:
+      shift*cmd-left_right: alt-left_right
+      alt-shift-up_down: alt-up_down
+      cmd-up_down: cmd-alt-up_down
+      cmd-shift-down: ctrl-g
+      cmd-shift-up: ctrl-shift-g
+      alt-down: cmd-k, cmd-d
+      alt-up: cmd-u # curosr undo
+      cmd-alt-shift-down: shift-cmd-l
+      cmd-alt-shift-up: escape
+    Editor, JetBrains, Zed, Obsidian:
+      cmd-spacebar: ctrl-spacebar
+      cmd-shift-spacebar: ctrl-shift-spacebar
+    Editor:
+      shift*cmd-arrows: alt-arrows
+      shift*alt-arrows: cmd-arrows
+      hyper-fn-up: hyper-fn-up
+      hyper-fn-down: hyper-fn-down
+      hyper-fn-left: hyper-fn-left
+      hyper-fn-right: hyper-fn-right
+      any*fn-up: page_up
+      any*fn-down: page_down
+      any*fn-left: home
+      any*fn-right: end
+    # Web Browsers
+    Chrome:
+      ctrl-left: cmd-shift-open_bracket
+      ctrl-right: cmd-shift-close_bracket
+    Zen:
+      cmd-shift-c: ctrl-shift-c
+      ctrl-up: cmd-shift-open_bracket
+      ctrl-down: cmd-shift-close_bracket
+    Discord:
+      ctrl-up: alt-up
+      ctrl-down: alt-down
+      ctrl-alt-up: cmd-alt-up
+      ctrl-alt-down: cmd-alt-down
+    Obsidian:
+      ctrl-alt-left: cmd-shift-open_bracket
+      ctrl-alt-right: cmd-shift-close_bracket
+    TypingMind:
+      cmd-b: cmd-b # Toggle Sidebar
+      cmd-e: cmd-alt-r # Reset Chat
+      cmd-n: cmd-alt-o # New Chat
+      cmd-p: cmd-alt-p # Toggle Plugins
+      cmd-r: cmd-alt-e # Regenerate
+      cmd-w: cmd-alt-o # New Chat
+      cmd-shift-c: cmd-alt-c # Copy Last Message
+      cmd-shift-n: cmd-n # New Window
+    # Custom Keys
+    Custom Keys:
+      Slack, cmd-p: cmd-k, @repeat = true
+      Duolingo, button2: enter
+      Obsidian, rshift-left: cmd-alt-left
+      Obsidian, rshift-right: cmd-alt-right
+    Custom Mouse Buttons:
+      # Back, Forward
+      button4, Safari: cmd-open_bracket
+      button5, Safari: cmd-close_bracket
+      # Left, Right Tab
+      cmd-button4: cmd-shift-open_bracket
+      cmd-button5: cmd-shift-close_bracket
+      # Prev, Next Item
+      alt-button4, Notion: ctrl-shift-j
+      alt-button5, Notion: ctrl-shift-k
+      # Prev, Next Space
+      ctrl-button4: hyper-ctrl-left
+      ctrl-button5: hyper-ctrl-right
+      # Move to Prev, Next Space
+      hyper-ctrl-button4: hyper-ctrl-comma
+      hyper-ctrl-button5: hyper-ctrl-period
+    Remapping Keys:
+      hyper-q: hyper-cmd-q
+      hyper-comma: hyper-cmd-comma
+      hyper-period: hyper-cmd-period
+      hyper-delete_or_backspace: fn-delete_forward
+      hyper-rshift: hyper-alt-tab
+      cmd-caps_lock: enter
+      cmd-delete_or_backspace: alt-delete_or_backspace
+      alt-delete_or_backspace: cmd-delete_or_backspace
+      ctrl-tab: cmd-grave_accent_and_tilde
+      rshift-slash: shift-slash
+      rshift-left: cmd-open_bracket
+      rshift-right: cmd-close_bracket
+      grave_accent_and_tilde, @language == ko: alt-grave_accent_and_tilde
+      fn-l: cmd-ctrl-q, @repeat = false, @halt = true
+    # Search Box
+    Custom Search Box:
+      cmd-l, Zen, in_search_box != true: in_search_box = true, in_tab_search = false, cmd-l
+    Caps Lock:
+      caps_lock: f16
+    Hyper Caps Lock:
+      hyper-caps_lock, in_search_box == true: in_search_box = false, escape
+      hyper-caps_lock, Fork: in_search_box = true, cmd-p
+      hyper-caps_lock, iTerm, Ghostty: in_search_box = true, ctrl-shift-r
+      hyper-caps_lock, JetBrains: in_search_box = true, cmd-e
+      hyper-caps_lock, Obsidian: in_search_box = true, cmd-o
+      hyper-caps_lock, VSCode: in_search_box = true, cmd-e
+      hyper-caps_lock, TypingMind: in_search_box = true, cmd-k
+      hyper-caps_lock, Zed: in_search_box = true, cmd-p
+      hyper-caps_lock: in_search_box = true, cmd-k
+    Hyper Tab:
+      hyper-tab, in_search_box == true: in_search_box = false, escape
+      hyper-tab, iTerm, Ghostty: in_search_box = true, ctrl-r
+      hyper-tab, JetBrains: in_search_box = true, cmd-f12
+      hyper-tab, Zed: in_search_box = true, alt-shift-t
+      hyper-tab, Zen: in_search_box = true, in_tab_search = true, cmd-l, cmd-a, delete_or_backspace, delete_or_backspace, shift-5, spacebar
+      hyper-tab: vk_none
+    Double Shift:
+      shift, shift == true, in_search_box == true: in_search_box = false, escape
+      shift, shift == true, Fork: in_search_box = true, cmd-p
+      shift, shift == true, Ghostty: in_search_box = true, cmd-shift-p
+      shift, shift == true, JetBrains: in_search_box = true, shift, shift
+      shift, shift == true, Obsidian: in_search_box = true, cmd-p
+      shift, shift == true, VSCode: in_search_box = true, cmd-shift-p
+      shift, shift == true, Zed: in_search_box = true, cmd-shift-p
+      shift, shift == true, Zen: in_search_box = true, in_tab_search = false, cmd-l
+      shift, shift == true: in_search_box = true, cmd-l
+      shift, shift != true:
+        parameters:
+          basic.to_delayed_action_delay_milliseconds: 300
+        to: shift = true, shift
+        to_delayed_action:
+          to_if_invoked: shift = false
+          to_if_canceled: shift = false
+    Escape Search Box:
+      in_search_box == true, button1: in_search_box = false, button1
+      in_search_box == true, escape, Zen: in_search_box = false, escape, f6
+      in_search_box == true, escape: in_search_box = false, escape
+      in_search_box == true, in_tab_search == true, enter, Zen: in_search_box = false, enter
+      in_search_box == true, in_tab_search != true, enter, Zen: in_search_box = false, alt-enter
+      in_search_box == true, enter: in_search_box = false, enter
+    Disabled Keys:
+      alt-caps_lock: vk_none
+    Switch profiles:
+      hyper-escape:
+        to:
+          - shell_command: |
+              export PATH="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/":$PATH
+              karabiner_cli --select-profile default
+              osascript -e "display notification \"Switch to default profile\" with title \"Karabiner\""
+    Clipboards:
+      hyper-c-alphanums:
+        to:
+          - cmd-c
+          - shell_command: |
+              export PATH=/etc/profiles/per-user/$USER/bin/:$PATH
+              pbpaste | skate set alphanums@pb
+      hyper-v-alphanums:
+        to:
+          - shell_command: |
+              export PATH=/etc/profiles/per-user/$USER/bin/:$PATH
+              skate get alphanums@pb | pbcopy
+              osascript -e 'tell application "System Events" to keystroke "v" using {command down}'
+      hyper-cmd-z:
+        to:
+          - cmd-c
+          - shell_command: |
+              export LANG=ko_KR.UTF-8
+              pbpaste | /opt/homebrew/bin/zed -
+    Ghostty programs:
+      hyper-x-a: ghostty-exec zai 'cd $HOME/zai && uv run fastapi dev zai'
+      hyper-x-g: ghostty-exec lazygit 'lazygit --use-config-file $HOME/nx/desktop/users/default/programs/ghostty/launch-lazygit.yaml'
+      hyper-x-k: ghostty-exec k9s 'k9s --readonly --command context'
+    Nix:
+      hyper-n-r: ghostty-exec 'darwin-rebuild switch' 'darwin-rebuild switch || read -p "echo Press enter to continue"'
+      hyper-n-s: ghostty-exec nx-sync 'nx-sync || read -p "echo Press enter to continue"'
+    # Switch windows
+    Aerospace:
+      hyper-alt-delete_or_backspace: aerospace enable toggle
