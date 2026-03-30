@@ -1,0 +1,36 @@
+#!/usr/bin/env -S just -f
+# nx-lock: Lock file update commands
+
+export JUST_JUSTFILE := justfile()
+
+DATE := `date +%Y-%m-%d`
+commit := "true"
+
+# List all commands
+default:
+    @just --list
+
+# Update flake.lock (auto-commits if changed)
+flake:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix flake update --flake "$NH_FLAKE"
+    if [ "{{commit}}" != "true" ]; then exit 0; fi
+    if git -C "$NH_FLAKE" diff --quiet flake.lock 2>/dev/null; then
+        echo "flake.lock: no changes"
+    else
+        nx git commit "feat(lock): update @ {{DATE}}" flake.lock
+    fi
+
+# Update uv.lock (auto-commits if changed)
+uv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$NH_FLAKE"
+    uv lock --upgrade
+    if [ "{{commit}}" != "true" ]; then exit 0; fi
+    if git -C "$NH_FLAKE" diff --quiet uv.lock 2>/dev/null; then
+        echo "uv.lock: no changes"
+    else
+        nx git commit "feat(python): update uv.lock @ {{DATE}}" uv.lock
+    fi

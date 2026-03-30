@@ -1,0 +1,11 @@
+// https://zed.dev/docs/configuring-zed#settings-files
+{
+  "file_types": {
+    "JSONC": ["*.json5"]
+  },
+  "languages": {
+    "JSONC": {
+      "format_on_save": "off"
+    }
+  }
+}

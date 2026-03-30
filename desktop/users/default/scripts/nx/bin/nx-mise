@@ -1,0 +1,13 @@
+#!/usr/bin/env -S just -f
+# nx-mise: mise management commands
+
+export JUST_JUSTFILE := justfile()
+
+# List all commands
+default:
+    @just --list
+
+# Upgrade all mise tools
+upgrade *args:
+    #!/usr/bin/env fish
+    MISE_GITHUB_TOKEN=(gh auth token) mise upgrade -j 8 --yes {{args}}
