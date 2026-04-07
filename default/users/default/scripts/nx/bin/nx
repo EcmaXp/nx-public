@@ -1,0 +1,21 @@
+#!/usr/bin/env fish
+# nx: Nix tool dispatcher
+
+if test (count $argv) -eq 0
+    echo "Available commands:"
+    for cmd in (complete -C 'nx-' | string split -f1 \t)
+        set name (string replace 'nx-' '' $cmd)
+        echo "  nx $name"
+    end
+    exit 0
+end
+
+set command $argv[1]
+set args $argv[2..]
+
+if not command -q nx-$command
+    echo "nx-$command: command not found" >&2
+    exit 127
+end
+
+exec nx-$command $args

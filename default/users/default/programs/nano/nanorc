@@ -1,0 +1,12 @@
+set titlecolor black,white
+set numbercolor black,white
+set stripecolor black,white
+set scrollercolor white,black
+set selectedcolor black,white
+set spotlightcolor black,white
+set minicolor black,white
+set promptcolor black,white
+set statuscolor black,white
+set errorcolor black,white
+set keycolor black,white
+set functioncolor white,black

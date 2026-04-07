@@ -1,0 +1,11 @@
+# use op: replace 1Password op:// references with actual values
+use_op() {
+  local tpl=""
+  for var in $(env | grep 'op://' | cut -d= -f1); do
+    tpl+="${var}={{ ${!var} }}"$'\n'
+  done
+  [[ -z "$tpl" ]] && return
+  while IFS='=' read -r key value; do
+    export "$key"="$value"
+  done < <(printf '%s' "$tpl" | op inject)
+}

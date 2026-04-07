@@ -1,0 +1,71 @@
+{
+  "env": {
+    "DISABLE_BUG_COMMAND": "1",
+    "DISABLE_ERROR_REPORTING": "1"
+  },
+  "permissions": {
+    "allow": [],
+    "deny": [
+      "Bash(git add .)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "WebFetch(domain:169.254.169.254)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(git commit --amend:*)",
+      "Bash(git push:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir /tmp/claude /tmp/claude-$UID 2>/dev/null; true"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "plugin-dev@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": true,
+    "pr-review-toolkit@claude-plugins-official": true,
+    "agent-sdk-dev@claude-plugins-official": false,
+    "pyright-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "claude.internal"
+      ],
+      "allowUnixSockets": [
+        "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        "~/src",
+        "~/.cache/uv",
+        "~/Library/Caches/treefmt"
+      ]
+    },
+    "enableWeakerNetworkIsolation": true
+  },
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "high",
+  "autoMemoryEnabled": true,
+  "autoDreamEnabled": true,
+  "skipAutoPermissionPrompt": true,
+  "showThinkingSummaries": true
+}
