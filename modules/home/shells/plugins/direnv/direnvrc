@@ -1,0 +1,52 @@
+# use op: replace 1Password op:// references with actual values
+# resolved values are cached encrypted, decryptable only within the same
+# Claude Code session; outside a session op inject always runs directly
+use_op() {
+  local var tpl="" vars=()
+  for var in $(env | grep 'op://' | cut -d= -f1); do
+    tpl+="${var}={{ ${!var} }}"$'\n'
+    vars+=("$var")
+  done
+  [[ -z "$tpl" ]] && return 0
+
+  # key material: prefer the per-session random key (SessionStart hook,
+  # erased at SessionEnd) over the session id, which is recoverable from
+  # transcript filenames after the session ends
+  local sid="${OP_CACHE_SESSION_KEY:-${CLAUDE_CODE_SESSION_ID:-}}" dir="${CLAUDE_CODE_TMPDIR:-${TMPDIR:-}}"
+  local hash="" cache="" pass="" resolved=""
+  if [[ -n "$sid" && -n "$dir" ]] && command -v openssl >/dev/null 2>&1; then
+    hash="$(printf '%s' "$tpl" | openssl dgst -sha256 -r 2>/dev/null | cut -c1-16)" || hash=""
+    if [[ -n "$hash" ]]; then
+      cache="${dir}/op-inject-${hash}.enc"
+      pass="${sid}:${hash}"
+    fi
+  fi
+
+  # cache read: decrypt, then require every expected var at line start
+  if [[ -n "$cache" && -f "$cache" ]]; then
+    resolved="$(OP_CACHE_PASS="$pass" openssl enc -d -aes-256-cbc -pbkdf2 \
+      -pass env:OP_CACHE_PASS -in "$cache" 2>/dev/null | tr -d '\0')" || resolved=""
+    for var in "${vars[@]}"; do
+      [[ $'\n'"$resolved" == *$'\n'"${var}="* ]] || { resolved=""; break; }
+    done
+  fi
+
+  # cache miss: resolve via op, then store encrypted (best effort)
+  if [[ -z "$resolved" ]]; then
+    resolved="$(printf '%s' "$tpl" | op inject)" || return 0
+    [[ -z "$resolved" ]] && return 0
+    if [[ -n "$cache" ]]; then
+      (
+        umask 077
+        printf '%s' "$resolved" | OP_CACHE_PASS="$pass" openssl enc -aes-256-cbc \
+          -pbkdf2 -salt -pass env:OP_CACHE_PASS -out "${cache}.$$" &&
+          mv -f "${cache}.$$" "$cache" || rm -f "${cache}.$$"
+      ) >/dev/null 2>&1 || true
+    fi
+  fi
+
+  local key value
+  while IFS='=' read -r key value; do
+    export "$key"="$value"
+  done <<<"$resolved"
+}

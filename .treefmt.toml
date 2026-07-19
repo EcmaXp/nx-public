@@ -1,0 +1,31 @@
+# treefmt - One CLI to format the code tree
+# https://github.com/numtide/treefmt
+# https://treefmt.com/latest/getting-started/configure/
+
+excludes = []
+on-unmatched = "info"
+walk = "auto"
+
+[formatter.editorconfig]
+command = "eclint"
+options = ["-fix"]
+includes = ["*"]
+excludes = ["*.gitignore"]
+
+[formatter.nix]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.python-ruff-check]
+command = "ruff"
+options = ["check", "--fix"]
+includes = ["*.py"]
+
+[formatter.python-ruff-format]
+command = "ruff"
+options = ["format"]
+includes = ["*.py"]
+
+[formatter.markdown]
+command = "mdformat"
+includes = ["*.md"]

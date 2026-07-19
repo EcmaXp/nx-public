@@ -1,0 +1,27 @@
+programs:
+  Chrome: com.google.Chrome
+  Zen: app.zen-browser.zen
+  Discord:
+    - com.hnc.Discord
+    - com.hnc.DiscordCanary
+  Duolingo: com.duolingo.DuolingoMobile
+  Fork: com.DanPristupov.Fork
+  Ghostty: com.mitchellh.ghostty
+  JetBrains: com.jetbrains.*
+  Notion: notion.id
+  Obsidian: md.obsidian
+  Parallels Desktop: com.parallels.desktop.console
+  Raycast: com.raycast.macos
+  Safari: com.apple.Safari
+  Slack: com.tinyspeck.slackmacgap
+  VSCode:
+    - com.microsoft.VSCode
+    - com.microsoft.VSCodeInsiders
+    - com.todesktop.230313mzl4w4u92 # Cursor
+    - com.exafunction.windsurf # Windsurf
+  Zed: dev.zed.Zed
+  iTerm: com.googlecode.iterm2
+  TypingMind:
+    - com.apple.Safari.WebApp.634D9C48-9424-4CC4-9377-0111A372D7F6
+    - com.apple.Safari.WebApp.3CD34F74-FB4E-461F-B92A-BD80BBD59981
+    - com.apple.Safari.WebApp.BBF7FC0C-5CB3-400C-A27F-E2D5E354FBCC

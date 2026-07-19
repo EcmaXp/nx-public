@@ -1,0 +1,234 @@
+#!/usr/bin/env -S just -f
+# nx-lock: Lock file update commands
+
+export JUST_JUSTFILE := justfile()
+
+commit := "true"
+cooldown := "7"
+
+# List all commands
+default:
+    @just --list
+
+# Update flake.lock with a cooldown: pin each github input to the newest commit
+# at least `cooldown` days old (cooldown=0 disables). Auto-commits if changed.
+flake:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = ["httpx[socks]>=0.28"]
+    # ///
+    import json
+    import os
+    import subprocess
+    import sys
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+
+    import httpx
+
+    flake = Path(os.environ["NH_FLAKE"])
+    should_commit = "{{commit}}" == "true"
+    cooldown_days = int("{{cooldown}}")
+
+    token = subprocess.run(
+        ["gh", "auth", "token"], capture_output=True, text=True
+    ).stdout.strip()
+
+    overrides = []
+    if cooldown_days > 0:
+        cutoff = (datetime.now(UTC) - timedelta(days=cooldown_days)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        print(f"cooldown: pinning github inputs to newest commit <= {cutoff}")
+        nodes = json.loads((flake / "flake.lock").read_text())["nodes"]
+        headers = {"Accept": "application/vnd.github+json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        with httpx.Client(headers=headers, timeout=30, follow_redirects=True) as client:
+            for name, node in nodes["root"]["inputs"].items():
+                node_id = node[0] if isinstance(node, list) else node
+                original = nodes[node_id].get("original", {})
+                if original.get("type") != "github":
+                    continue
+                owner, repo = original["owner"], original["repo"]
+                params = {"until": cutoff, "per_page": 1}
+                if branch := original.get("ref"):
+                    params["sha"] = branch
+                url = f"https://api.github.com/repos/{owner}/{repo}/commits"
+                resp = client.get(url, params=params)
+                resp.raise_for_status()
+                commits = resp.json()
+                if not commits:
+                    print(
+                        f"  warn: no commit <= cutoff for {name}; leaving at branch HEAD",
+                        file=sys.stderr,
+                    )
+                    continue
+                sha = commits[0]["sha"]
+                print(f"  {name} -> {owner}/{repo} @ {sha[:12]} ({branch or 'default'})")
+                overrides += ["--override-input", name, f"github:{owner}/{repo}/{sha}"]
+
+    env = dict(os.environ)
+    if token:
+        env["NIX_CONFIG"] = f"access-tokens = github.com={token}"
+    subprocess.run(
+        ["nix", "flake", "update", *overrides, "--flake", str(flake)],
+        env=env,
+        check=True,
+    )
+
+    if should_commit:
+        clean = subprocess.run(
+            ["git", "-C", str(flake), "diff", "--quiet", "flake.lock"]
+        ).returncode == 0
+        if clean:
+            print("flake.lock: no changes")
+        else:
+            date = datetime.now().strftime("%Y-%m-%d")
+            subprocess.run(
+                ["nx", "git", "commit", f"feat(lock): update @ {date}", "flake.lock"],
+                check=True,
+            )
+
+# Update misepkgs.lock.toml (auto-commits if changed)
+mise:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = []
+    # ///
+    import os
+    import re
+    import subprocess
+    import sys
+    import tempfile
+    import tomllib
+    from datetime import datetime
+    from pathlib import Path
+
+    flake = Path(os.environ["NH_FLAKE"])
+    should_commit = "{{commit}}" == "true"
+    rel = "modules/home/packages/desktop/misepkgs.lock.toml"
+
+    user = os.environ["USER"]
+    host = subprocess.run(
+        ["hostname"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    config_attr = (
+        f'homeConfigurations."{user}@{host}"'
+        '.config.xdg.configFile."mise/config.toml".source'
+    )
+    token = subprocess.run(
+        ["gh", "auth", "token"], capture_output=True, text=True
+    ).stdout.strip()
+
+    # Versions already locked, used to pin any tool that can no longer resolve
+    # `@latest` under minimum_release_age (some backends expose no release date,
+    # so every version gets hidden by the age filter). Pinning the exact locked
+    # version sidesteps the filter; it re-bumps once the backend dates resolve.
+    lock_path = flake / rel
+    locked = {}
+    if lock_path.exists():
+        tools = tomllib.loads(lock_path.read_text()).get("tools", {})
+        for name, entries in tools.items():
+            if isinstance(entries, list) and entries and "version" in entries[0]:
+                locked[name] = entries[0]["version"]
+
+    def pin(text, pins):
+        for tool, version in pins.items():
+            pattern = re.compile(rf'^(\s*"?{re.escape(tool)}"?\s*=\s*)"[^"]*"', re.M)
+            text = pattern.sub(lambda m: f'{m.group(1)}"{version}"', text)
+        return text
+
+    with tempfile.TemporaryDirectory() as scratch:
+        scratch = Path(scratch)
+        out = subprocess.run(
+            ["nix", "build", "--no-link", "--print-out-paths", f"{flake}#{config_attr}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        config_text = Path(out).read_text()
+        config = scratch / "config.toml"
+        mise_lock = scratch / "mise.lock"
+
+        env = dict(os.environ)
+        env["MISE_CONFIG_DIR"] = str(scratch)
+        # Generating the lock is the one time enforcement must be off: backend
+        # tools (npm, pipx, ...) bootstrap their runtime from the lock being
+        # written, so locked=true would reject the not-yet-locked runtime.
+        env["MISE_LOCKED"] = "0"
+        if token:
+            env["MISE_GITHUB_TOKEN"] = token
+
+        pins = {}
+        # One pin per tool, so the existing lock size bounds the retries.
+        for _ in range(len(locked) + 1):
+            config.write_text(pin(config_text, pins))
+            config.chmod(0o644)
+            mise_lock.unlink(missing_ok=True)
+            proc = subprocess.Popen(
+                ["mise", "lock", "--global"], env=env, stderr=subprocess.PIPE, text=True
+            )
+            err = ""
+            for line in proc.stderr:
+                sys.stderr.write(line)
+                err += line
+            if proc.wait() == 0:
+                break
+            match = re.search(r"failed to resolve (\S+)@\S+ for lockfile", err)
+            tool = match.group(1) if match else None
+            if not tool or tool in pins or tool not in locked:
+                raise SystemExit(
+                    "mise lock failed" + (f": cannot pin {tool}" if tool else "")
+                )
+            pins[tool] = locked[tool]
+            print(f"pinning unresolvable {tool} -> {locked[tool]} (kept from existing lock)")
+        else:
+            raise SystemExit("mise lock failed: exhausted pin retries")
+
+        (flake / rel).write_bytes(mise_lock.read_bytes())
+
+    if should_commit:
+        clean = subprocess.run(
+            ["git", "-C", str(flake), "diff", "--quiet", rel]
+        ).returncode == 0
+        if clean:
+            print(f"{rel}: no changes")
+        else:
+            date = datetime.now().strftime("%Y-%m-%d")
+            subprocess.run(
+                ["nx", "git", "commit", f"feat(mise): update misepkgs @ {date}", rel],
+                check=True,
+            )
+
+# Update uv.lock (auto-commits if changed)
+uv:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = []
+    # ///
+    import os
+    import subprocess
+    from datetime import datetime
+    from pathlib import Path
+
+    flake = Path(os.environ["NH_FLAKE"])
+    should_commit = "{{commit}}" == "true"
+
+    subprocess.run(["uv", "lock", "--upgrade"], cwd=flake, check=True)
+
+    if should_commit:
+        clean = subprocess.run(
+            ["git", "-C", str(flake), "diff", "--quiet", "uv.lock"]
+        ).returncode == 0
+        if clean:
+            print("uv.lock: no changes")
+        else:
+            date = datetime.now().strftime("%Y-%m-%d")
+            subprocess.run(
+                ["nx", "git", "commit", f"feat(python): update uv.lock @ {date}", "uv.lock"],
+                check=True,
+            )

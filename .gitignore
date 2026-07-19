@@ -1,0 +1,26 @@
+# dotenv
+.env
+
+# Cache
+.cache/
+
+# Python
+__pycache__/
+.venv/
+
+# Linux
+*~
+
+# macOS
+.DS_Store
+
+# NixOS
+/configuration.nix
+/result
+
+# nx private state
+/config/*/.cache/
+/config/*/nx-*
+
+# Claude
+.claude/worktrees/

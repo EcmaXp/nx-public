@@ -1,0 +1,12 @@
+{
+  "name": "nx",
+  "owner": { "name": "user" },
+  "plugins": [
+    {
+      "name": "nx",
+      "description": "Personal coding guidelines and conventions as auto-loading skills",
+      "version": "1.0.0",
+      "source": "./modules/home/programs/claude/code/plugins/nx"
+    }
+  ]
+}
