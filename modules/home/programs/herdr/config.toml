@@ -1,0 +1,146 @@
+# https://herdr.dev/docs/configuration/
+
+onboarding = false
+
+[theme]
+name = "kanagawa"
+auto_switch = false
+# dark_name = "catppuccin"
+# light_name = "catppuccin-latte"
+
+# [theme.custom]
+# panel_bg = "reset"
+# accent = "#f5c2e7"
+# red = "#ff6188"
+# green = "#a6e3a1"
+
+[terminal]
+# default_shell = ""
+# shell_mode = "auto"
+# new_cwd = "follow"
+
+[update]
+# channel = "stable"
+# version_check = true
+# manifest_check = true
+
+[keys]
+# prefix = "ctrl+b"
+# help = "prefix+?"
+settings = ["prefix+s", "cmd+comma"]
+# detach = "prefix+q"
+reload_config = ["prefix+shift+r", "cmd+shift+comma"]
+open_notification_target = ["prefix+o", "cmd+j"]
+workspace_picker = ["prefix+w", "cmd+k", "cmd+o", "cmd+shift+p"]
+goto = ["prefix+g", "cmd+p"]
+new_workspace = ["prefix+shift+n", "cmd+n"]
+new_worktree = ["prefix+shift+g", "cmd+g"]
+# open_worktree = ""
+# remove_worktree = ""
+rename_workspace = ["prefix+shift+w", "cmd+shift+r"]
+close_workspace = ["prefix+shift+d", "cmd+alt+w"]
+previous_workspace = ["prefix+up", "ctrl+shift+up"]
+next_workspace = ["prefix+down", "ctrl+shift+down"]
+previous_agent = ["prefix+comma", "ctrl+up"]
+next_agent = ["prefix+period", "ctrl+down"]
+# focus_agent = ""
+# remote_image_paste = "ctrl+v"
+new_tab = ["prefix+c", "cmd+t"]
+rename_tab = ["prefix+shift+t", "cmd+r"]
+previous_tab = ["prefix+p", "ctrl+left"]
+next_tab = ["prefix+n", "ctrl+right"]
+switch_tab = ["prefix+1..9", "cmd+1..9"]
+# switch_workspace = ""
+close_tab = ["prefix+shift+x", "cmd+shift+w"]
+rename_pane = ["prefix+shift+p", "cmd+alt+r"]
+edit_scrollback = ["prefix+e", "cmd+e"]
+focus_pane_left = ["prefix+h", "ctrl+alt+left"]
+focus_pane_down = ["prefix+j", "ctrl+alt+down"]
+focus_pane_up = ["prefix+k", "ctrl+alt+up"]
+focus_pane_right = ["prefix+l", "ctrl+alt+right"]
+# cycle_pane_next = "prefix+tab"
+# cycle_pane_previous = "prefix+shift+tab"
+# last_pane = ""
+split_vertical = ["prefix+v", "cmd+d"]
+split_horizontal = ["prefix+minus", "cmd+shift+d"]
+close_pane = ["prefix+x"]
+zoom = ["prefix+z", "ctrl+enter"]
+resize_mode = ["prefix+r", "ctrl+alt+enter"]
+toggle_sidebar = ["prefix+b", "cmd+b"]
+# navigate_workspace_up = "up"
+# navigate_workspace_down = "down"
+# navigate_pane_left = "h"
+# navigate_pane_down = "j"
+# navigate_pane_up = "k"
+# navigate_pane_right = "l"
+
+# [[keys.command]]
+# key = "prefix+alt+g"
+# type = "pane"
+# command = "lazygit"
+
+# [keys.indexed]
+# tabs = ""
+# workspaces = ""
+# agents = ""
+
+# [worktrees]
+# directory = "~/.herdr/worktrees"
+
+[ui]
+# sidebar_width = 26
+# sidebar_min_width = 18
+# sidebar_max_width = 36
+# sidebar_collapsed_mode = "compact"
+# mobile_width_threshold = 64
+# mouse_capture = true
+# host_cursor = "auto"
+# right_click_passthrough_modifier = ""
+# redraw_on_focus_gained = true
+# mouse_scroll_lines = 3
+# confirm_close = true
+prompt_new_tab_name = false
+# pane_borders = true
+# pane_gaps = true
+show_agent_labels_on_pane_borders = true
+# hide_tab_bar_when_single_tab = false
+agent_panel_sort = "spaces"
+# accent = "cyan"
+
+[ui.toast]
+delivery = "herdr"
+# delay_seconds = 1
+
+[ui.toast.herdr]
+# position = "bottom-right"
+
+[ui.toast.clipboard]
+enabled = false
+# position = "bottom-center"
+
+[ui.sound]
+# enabled = true
+# path = "sounds/notification.mp3"
+# done_path = "sounds/done.mp3"
+# request_path = "sounds/request.mp3"
+
+# [ui.sound.agents]
+# droid = "off"
+
+[session]
+# resume_agents_on_restore = true
+
+[remote]
+# manage_ssh_config = true
+
+[experimental]
+# allow_nested = false
+# kitty_graphics = false
+pane_history = true
+switch_ascii_input_source_in_prefix = true
+# reveal_hidden_cursor_for_cjk_ime = false
+# cjk_ime_agents = []
+# cjk_ime_cursor_shape = "steady_block"
+
+[advanced]
+# scrollback_limit_bytes = 10000000

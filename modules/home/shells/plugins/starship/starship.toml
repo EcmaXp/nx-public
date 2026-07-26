@@ -1,0 +1,66 @@
+add_newline = false
+format = "$line_break$shell$shlvl$direnv$all$time$cmd_duration$status$line_break$directory$character"
+
+[profiles]
+directory = "$directory$character"
+
+[shell]
+disabled = false
+fish_indicator = "fish"
+xonsh_indicator = "xonsh"
+
+[shlvl]
+disabled = false
+
+[direnv]
+allowed_msg = ""
+denied_msg = "denied "
+disabled = false
+format = "[$symbol$loaded$allowed]($style)"
+loaded_msg = ""
+not_allowed_msg = "not allowed "
+unloaded_msg = "not loaded/"
+
+[status]
+disabled = false
+format = "[$symbol $status]($style) "
+
+[time]
+disabled = false
+
+[directory]
+fish_style_pwd_dir_length = 1
+truncation_length = 5
+truncation_symbol = "…/"
+
+[directory.substitutions]
+"~/Library/Mobile Documents/com~apple~CloudDocs" = "$iCloud"
+
+[package]
+disabled = true
+
+[aws.region_aliases]
+ap-southeast-1 = "apse1 (Singapore)"
+ap-northeast-1 = "apne1 (Tokyo)"
+ap-northeast-2 = "apne2 (Seoul)"
+us-east-1 = "usea1 (Virginia)"
+us-west-2 = "uswe2 (Oregon)"
+
+[gcloud]
+disabled = false
+
+[kubernetes]
+disabled = false
+format = "([$symbol$context( \\($namespace\\))]($style) )"
+
+[[kubernetes.contexts]]
+context_pattern = "(docker-desktop|orbstack)"
+context_alias = ""
+symbol = ""
+
+# optimize performance
+[python]
+disabled = true
+
+[git_status]
+ignore_submodules = true

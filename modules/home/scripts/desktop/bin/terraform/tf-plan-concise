@@ -1,0 +1,15 @@
+#!/usr/bin/env fish
+# tf plan with concise output
+# https://github.com/hashicorp/terraform/issues/10507#issuecomment-1120333083
+
+exec jq --slurp --raw-output '
+    map(select(.type == "planned_change") | .change) |
+    group_by(.action) |
+    map(
+        .[0].action as $action |
+        map(.resource.addr) |
+        sort |
+        "\($action) (\(. | length)):\n    \(map(.) | join("\n    "))\n"
+    ) |
+    .[]
+'

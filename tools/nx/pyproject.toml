@@ -1,0 +1,38 @@
+[project]
+name = "nx-scripts"
+version = "1"
+description = "EcmaXp's nx scripts"
+authors = [{ name = "EcmaXp" }]
+requires-python = ">= 3.14"
+dependencies = [
+    "click>=8.3",
+    "gitpython>=3.1",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "typer>=0.15",
+    "sqlalchemy-utils>=0.42",
+    "sqlalchemy>=2.0",
+    # C_INCLUDE_PATH=/opt/homebrew/include/ LIBRARY_PATH=/opt/homebrew/lib/ uv sync
+    "sqlcipher3>=0.5",
+    "sqlmodel>=0.0.27",
+    "watchdog>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "reloader-py>=0.18",
+    "sqlacodegen>=3.2",
+]
+
+[project.urls]
+Repository = "https://github.com/EcmaXp/nx-public"
+
+[project.scripts]
+nx-sync = "syncers.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["syncers"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
