@@ -1,0 +1,6 @@
+#!/bin/sh
+p=${1:?provider}
+shift
+sidepulse hook-log --provider "$p" \
+  --log "${XDG_STATE_HOME:-$HOME/.local/state}/sidepulse/agent-monitor/$p.jsonl" "$@" 2>/dev/null
+exit 0

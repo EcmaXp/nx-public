@@ -1,0 +1,2204 @@
+diff --git c/docs/next/api/herdr-api.schema.json w/docs/next/api/herdr-api.schema.json
+index 5313f1c..8c1766d 100644
+--- c/docs/next/api/herdr-api.schema.json
++++ w/docs/next/api/herdr-api.schema.json
+@@ -2145,6 +2145,20 @@
+           ],
+           "type": "object"
+         },
++        "GlobalPaneResizeParams": {
++          "properties": {
++            "width": {
++              "format": "uint16",
++              "maximum": 65535,
++              "minimum": 0,
++              "type": "integer"
++            }
++          },
++          "required": [
++            "width"
++          ],
++          "type": "object"
++        },
+         "IntegrationInstallParams": {
+           "properties": {
+             "target": {
+@@ -4813,6 +4827,54 @@
+           ],
+           "type": "object"
+         },
++        {
++          "properties": {
++            "method": {
++              "const": "global_pane.toggle",
++              "type": "string"
++            },
++            "params": {
++              "$ref": "#/schemas/request/$defs/EmptyParams"
++            }
++          },
++          "required": [
++            "method",
++            "params"
++          ],
++          "type": "object"
++        },
++        {
++          "properties": {
++            "method": {
++              "const": "global_pane.focus",
++              "type": "string"
++            },
++            "params": {
++              "$ref": "#/schemas/request/$defs/EmptyParams"
++            }
++          },
++          "required": [
++            "method",
++            "params"
++          ],
++          "type": "object"
++        },
++        {
++          "properties": {
++            "method": {
++              "const": "global_pane.resize",
++              "type": "string"
++            },
++            "params": {
++              "$ref": "#/schemas/request/$defs/GlobalPaneResizeParams"
++            }
++          },
++          "required": [
++            "method",
++            "params"
++          ],
++          "type": "object"
++        },
+         {
+           "properties": {
+             "method": {
+diff --git c/src/api/mod.rs w/src/api/mod.rs
+index d28a82a..b463ece 100644
+--- c/src/api/mod.rs
++++ w/src/api/mod.rs
+@@ -23,6 +23,9 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
+     matches!(
+         &request.method,
+         Method::ServerReloadConfig(_)
++            | Method::GlobalPaneToggle(_)
++            | Method::GlobalPaneFocus(_)
++            | Method::GlobalPaneResize(_)
+             | Method::ServerReloadAgentManifests(_)
+             | Method::NotificationShow(_)
+             | Method::ProductAnnouncementDismiss(_)
+diff --git c/src/api/schema.rs w/src/api/schema.rs
+index ba9f0c3..3e2ac90 100644
+--- c/src/api/schema.rs
++++ w/src/api/schema.rs
+@@ -53,6 +53,12 @@ pub enum Method {
+     ServerLiveHandoff(ServerLiveHandoffParams),
+     #[serde(rename = "server.reload_config")]
+     ServerReloadConfig(EmptyParams),
++    #[serde(rename = "global_pane.toggle")]
++    GlobalPaneToggle(EmptyParams),
++    #[serde(rename = "global_pane.focus")]
++    GlobalPaneFocus(EmptyParams),
++    #[serde(rename = "global_pane.resize")]
++    GlobalPaneResize(GlobalPaneResizeParams),
+     #[serde(rename = "server.agent_manifests")]
+     ServerAgentManifests(EmptyParams),
+     #[serde(rename = "server.reload_agent_manifests")]
+diff --git c/src/api/schema/common.rs w/src/api/schema/common.rs
+index bf0d7ca..1da64a6 100644
+--- c/src/api/schema/common.rs
++++ w/src/api/schema/common.rs
+@@ -25,6 +25,11 @@ pub(super) fn metadata_token_values_schema(
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+ pub struct EmptyParams {}
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
++pub struct GlobalPaneResizeParams {
++    pub width: u16,
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+ pub struct WorkspaceTarget {
+     pub workspace_id: String,
+diff --git c/src/api/server.rs w/src/api/server.rs
+index aa9e221..0c2e065 100644
+--- c/src/api/server.rs
++++ w/src/api/server.rs
+@@ -389,6 +389,9 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
+         Method::ServerStop(_) => "server.stop",
+         Method::ServerLiveHandoff(_) => "server.live_handoff",
+         Method::ServerReloadConfig(_) => "server.reload_config",
++        Method::GlobalPaneToggle(_) => "global_pane.toggle",
++        Method::GlobalPaneFocus(_) => "global_pane.focus",
++        Method::GlobalPaneResize(_) => "global_pane.resize",
+         Method::ServerAgentManifests(_) => "server.agent_manifests",
+         Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
+         Method::NotificationShow(_) => "notification.show",
+diff --git c/src/app/actions.rs w/src/app/actions.rs
+index 3f0bed0..320dc4b 100644
+--- c/src/app/actions.rs
++++ w/src/app/actions.rs
+@@ -457,7 +457,7 @@ impl AppState {
+     }
+ 
+     pub fn switch_workspace(&mut self, idx: usize) {
+-        if idx < self.workspaces.len() {
++        if idx < self.workspaces.len() && !self.is_internal_idx(idx) {
+             let previous_focus = self.current_pane_focus_target();
+             self.active = Some(idx);
+             self.selected = idx;
+@@ -482,7 +482,7 @@ impl AppState {
+         if self
+             .workspaces
+             .get(ws_idx)
+-            .is_none_or(|ws| tab_idx >= ws.tabs.len())
++            .is_none_or(|ws| self.is_internal_ws(ws) || tab_idx >= ws.tabs.len())
+         {
+             return false;
+         }
+@@ -548,6 +548,9 @@ impl AppState {
+         if source_idx >= self.workspaces.len() || insert_idx > self.workspaces.len() {
+             return false;
+         }
++        if self.is_internal_idx(source_idx) {
++            return false;
++        }
+ 
+         let target_idx = if source_idx < insert_idx {
+             insert_idx - 1
+@@ -572,6 +575,7 @@ impl AppState {
+         self.active = active_id.and_then(|id| self.workspaces.iter().position(|ws| ws.id == id));
+         self.selected = selected_id
+             .and_then(|id| self.workspaces.iter().position(|ws| ws.id == id))
++            .or_else(|| self.first_visible_workspace_idx())
+             .unwrap_or(0);
+         true
+     }
+@@ -638,6 +642,7 @@ impl AppState {
+         self.active = active_id.and_then(|id| self.workspaces.iter().position(|ws| ws.id == id));
+         self.selected = selected_id
+             .and_then(|id| self.workspaces.iter().position(|ws| ws.id == id))
++            .or_else(|| self.first_visible_workspace_idx())
+             .unwrap_or(0);
+         true
+     }
+@@ -773,6 +778,14 @@ impl AppState {
+             if self.selected >= self.workspaces.len() {
+                 self.selected = self.workspaces.len() - 1;
+             }
++            if self.is_internal_idx(self.selected) {
++                let Some(idx) = self.first_visible_workspace_idx() else {
++                    self.active = None;
++                    self.selected = 0;
++                    return;
++                };
++                self.selected = idx;
++            }
+             self.active = Some(self.selected);
+         }
+     }
+@@ -2227,6 +2240,12 @@ impl AppState {
+                         self.active = Some(self.workspaces.len() - 1);
+                     }
+                 }
++                if self.active.is_some_and(|idx| self.is_internal_idx(idx)) {
++                    self.active = self.first_visible_workspace_idx();
++                    if self.active.is_none() && self.mode == Mode::Terminal {
++                        self.mode = Mode::Navigate;
++                    }
++                }
+                 if let Some(id) = selected_workspace_id {
+                     if let Some(idx) = self.workspaces.iter().position(|ws| ws.id == id) {
+                         self.selected = idx;
+diff --git c/src/app/api.rs w/src/app/api.rs
+index 470dddf..c42aad0 100644
+--- c/src/app/api.rs
++++ w/src/app/api.rs
+@@ -837,15 +837,9 @@ impl App {
+                 .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
+         });
+         if current_focus == self.last_focus {
+-            if let (Some((ws_idx, pane_id)), Some(event)) = (current_focus, outer_event) {
+-                self.send_pane_focus_event(ws_idx, pane_id, event);
+-            }
+             return;
+         }
+ 
+-        if let Some((ws_idx, pane_id)) = self.last_focus {
+-            self.send_pane_focus_event(ws_idx, pane_id, crate::ghostty::FocusEvent::Lost);
+-        }
+         if let Some((ws_idx, pane_id)) = current_focus {
+             let event = outer_event.unwrap_or_else(|| {
+                 if self.state.outer_terminal_focus == Some(false) {
+@@ -909,6 +903,27 @@ impl App {
+                 };
+                 return serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+             }
++            Method::GlobalPaneToggle(_) => {
++                self.toggle_global_pane();
++                SuccessResponse {
++                    id: request.id,
++                    result: ResponseResult::Ok {},
++                }
++            }
++            Method::GlobalPaneFocus(_) => {
++                self.focus_global_pane();
++                SuccessResponse {
++                    id: request.id,
++                    result: ResponseResult::Ok {},
++                }
++            }
++            Method::GlobalPaneResize(params) => {
++                self.resize_global_pane(params.width);
++                SuccessResponse {
++                    id: request.id,
++                    result: ResponseResult::Ok {},
++                }
++            }
+             Method::ServerReloadConfig(_) => {
+                 let report = self.reload_config();
+                 SuccessResponse {
+diff --git c/src/app/api/panes.rs w/src/app/api/panes.rs
+index 9b9a28c..24af86e 100644
+--- c/src/app/api/panes.rs
++++ w/src/app/api/panes.rs
+@@ -474,6 +474,7 @@ impl App {
+         };
+ 
+         self.state.focus_pane_in_workspace(ws_idx, pane_id);
++        self.set_global_focus_for_pane(pane_id);
+         self.state.mark_active_tab_seen();
+         self.state.mode = crate::app::Mode::Terminal;
+ 
+diff --git c/src/app/git_refresh.rs w/src/app/git_refresh.rs
+index fd512d5..f27e12f 100644
+--- c/src/app/git_refresh.rs
++++ w/src/app/git_refresh.rs
+@@ -118,6 +118,7 @@ impl App {
+         self.state
+             .workspaces
+             .iter()
++            .filter(|ws| !self.state.is_internal_ws(ws))
+             .filter_map(|ws| {
+                 let cwd =
+                     ws.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)?;
+diff --git c/src/app/global_pane.rs w/src/app/global_pane.rs
+new file mode 100644
+index 0000000..1d1a315
+--- /dev/null
++++ w/src/app/global_pane.rs
+@@ -0,0 +1,400 @@
++use crate::app::state::AppState;
++use crate::app::{App, Mode};
++use crate::layout::PaneId;
++use crate::terminal::TerminalId;
++use crate::workspace::Workspace;
++
++const INTERNAL_WORKSPACE_NAME: &str = "global";
++
++// ponytail: dock visibility, focus and width are server-global; per-client
++#[derive(Debug, Clone, Default)]
++pub(crate) struct GlobalPane {
++    pub visible: bool,
++    pub focus_global: bool,
++    pub workspace_id: Option<String>,
++    pub config: crate::config::GlobalPaneConfig,
++    pub width: Option<u16>,
++}
++
++impl AppState {
++    pub(crate) fn is_internal_ws(&self, ws: &Workspace) -> bool {
++        self.global_pane.workspace_id.as_deref() == Some(ws.id.as_str())
++    }
++
++    pub(crate) fn is_internal_idx(&self, idx: usize) -> bool {
++        self.workspaces
++            .get(idx)
++            .is_some_and(|ws| self.is_internal_ws(ws))
++    }
++
++    pub(crate) fn internal_workspace_idx(&self) -> Option<usize> {
++        let id = self.global_pane.workspace_id.as_deref()?;
++        self.workspaces.iter().position(|ws| ws.id == id)
++    }
++
++    pub(crate) fn first_visible_workspace_idx(&self) -> Option<usize> {
++        (0..self.workspaces.len()).find(|&idx| !self.is_internal_idx(idx))
++    }
++
++    pub(crate) fn global_pane_visible(&self) -> bool {
++        self.global_pane.visible && self.internal_workspace_idx().is_some()
++    }
++
++    pub(crate) fn global_focus_active(&self) -> bool {
++        self.global_pane.visible
++            && self.global_pane.focus_global
++            && self.internal_workspace_idx().is_some()
++    }
++
++    pub(crate) fn global_pane_target(&self) -> Option<(usize, PaneId, TerminalId)> {
++        let ws_idx = self.internal_workspace_idx()?;
++        let ws = self.workspaces.get(ws_idx)?;
++        let pane_id = ws.focused_pane_id()?;
++        let terminal_id = ws.terminal_id(pane_id)?.clone();
++        Some((ws_idx, pane_id, terminal_id))
++    }
++
++    pub(crate) fn global_pane_claims_pane(&self, pane_id: PaneId) -> Option<bool> {
++        let ws = self.workspaces.get(self.internal_workspace_idx()?)?;
++        if !ws.tabs.iter().any(|tab| tab.panes.contains_key(&pane_id)) {
++            return None;
++        }
++        Some(
++            self.global_pane_visible()
++                && self.global_pane_target().map(|(_, id, _)| id) == Some(pane_id),
++        )
++    }
++}
++
++pub(crate) fn sanitize_restored_selection(
++    workspaces: &[Workspace],
++    internal_id: Option<&str>,
++    active: Option<usize>,
++    selected: usize,
++) -> (Option<usize>, usize) {
++    let is_internal = |idx: usize| {
++        workspaces
++            .get(idx)
++            .is_some_and(|ws| Some(ws.id.as_str()) == internal_id)
++    };
++    let first_visible = workspaces
++        .iter()
++        .position(|ws| Some(ws.id.as_str()) != internal_id);
++    let sanitized_active = active
++        .filter(|&idx| idx < workspaces.len() && !is_internal(idx))
++        .or_else(|| active.and(first_visible));
++    let selected = selected.min(workspaces.len().saturating_sub(1));
++    let selected = if is_internal(selected) {
++        first_visible.unwrap_or(0)
++    } else {
++        selected
++    };
++    (sanitized_active, selected)
++}
++
++pub(crate) fn snapshot_internal_id(
++    snapshot: &crate::persist::SessionSnapshot,
++    workspaces: &[Workspace],
++) -> Option<String> {
++    let id = snapshot
++        .global_pane
++        .as_ref()
++        .map(|gp| gp.workspace_id.clone())
++        .or_else(|| {
++            workspaces
++                .iter()
++                .find(|ws| ws.custom_name.as_deref() == Some(INTERNAL_WORKSPACE_NAME))
++                .map(|ws| ws.id.clone())
++        })?;
++    workspaces.iter().any(|ws| ws.id == id).then_some(id)
++}
++
++pub(crate) fn restore_session_fields(
++    state: &mut AppState,
++    snapshot: &crate::persist::SessionSnapshot,
++) {
++    state.global_pane.workspace_id = snapshot_internal_id(snapshot, &state.workspaces);
++    if let Some(width) = snapshot.global_pane.as_ref().and_then(|gp| gp.width) {
++        state.global_pane.width = Some(width);
++    }
++    let (active, selected) = sanitize_restored_selection(
++        &state.workspaces,
++        state.global_pane.workspace_id.as_deref(),
++        snapshot.active,
++        snapshot.selected,
++    );
++    state.active = active;
++    state.selected = selected;
++}
++
++impl crate::persist::SessionSnapshot {
++    pub(crate) fn with_global_pane(mut self, state: &AppState) -> Self {
++        self.global_pane =
++            state
++                .internal_workspace_idx()
++                .map(|idx| crate::persist::GlobalPaneSnapshot {
++                    workspace_id: state.workspaces[idx].id.clone(),
++                    width: state.global_pane.width,
++                });
++        self
++    }
++}
++
++impl App {
++    pub(crate) fn toggle_global_pane(&mut self) {
++        if self.state.global_pane_visible() {
++            self.state.global_pane.visible = false;
++            self.state.mode = if self.state.active.is_some() {
++                Mode::Terminal
++            } else {
++                Mode::Navigate
++            };
++        } else {
++            if self.state.internal_workspace_idx().is_none() {
++                if let Err(err) = self.create_internal_workspace() {
++                    tracing::warn!("failed to create global pane workspace: {err}");
++                    return;
++                }
++            }
++            self.state.global_pane.visible = true;
++            self.state.global_pane.focus_global = true;
++            self.state.mode = Mode::Terminal;
++        }
++        self.render_dirty.request_generic();
++        self.render_notify.notify_one();
++    }
++
++    pub(crate) fn focus_global_pane(&mut self) {
++        if !self.state.global_pane_visible() {
++            self.toggle_global_pane();
++            return;
++        }
++        if self.state.global_focus_active() && self.state.active.is_none() {
++            return;
++        }
++        self.state.global_pane.focus_global = !self.state.global_pane.focus_global;
++        self.state.mode = Mode::Terminal;
++        self.render_dirty.request_generic();
++        self.render_notify.notify_one();
++    }
++
++    pub(crate) fn resize_global_pane(&mut self, width: u16) {
++        if self.state.global_pane.width == Some(width) {
++            return;
++        }
++        self.state.global_pane.width = Some(width);
++        self.state.mark_session_dirty();
++        self.render_dirty.request_generic();
++        self.render_notify.notify_one();
++    }
++
++    pub(crate) fn set_global_focus_for_pane(&mut self, pane_id: PaneId) -> Option<bool> {
++        if !self.state.global_pane_visible() {
++            return None;
++        }
++        let docked = self.state.global_pane_claims_pane(pane_id) == Some(true);
++        if self.state.global_pane.focus_global == docked {
++            return Some(docked);
++        }
++        self.state.global_pane.focus_global = docked;
++        self.state.mode = Mode::Terminal;
++        self.render_dirty.request_generic();
++        self.render_notify.notify_one();
++        Some(docked)
++    }
++
++    fn create_internal_workspace(&mut self) -> std::io::Result<()> {
++        let config = self.state.global_pane.config.clone();
++        let cwd = if config.cwd.is_empty() {
++            std::env::current_dir().unwrap_or_else(|_| "/".into())
++        } else {
++            crate::worktree::expand_tilde_absolute_path(&config.cwd)
++        };
++        let previous_active = self.state.active;
++        let previous_selected = self.state.selected;
++        let ws_idx = self.create_workspace_with_options(cwd, false)?;
++        if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
++            ws.custom_name = Some(INTERNAL_WORKSPACE_NAME.to_string());
++            self.state.global_pane.workspace_id = Some(ws.id.clone());
++        }
++        if previous_active.is_none() {
++            self.state.active = None;
++            self.state.selected = previous_selected;
++        }
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn test_app() -> App {
++        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
++        App::new(
++            &crate::config::Config::default(),
++            crate::app::AppPolicy::TEST,
++            None,
++            api_rx,
++            crate::api::EventHub::default(),
++        )
++    }
++
++    fn push_workspace(app: &mut App, name: &str) -> String {
++        let ws = crate::workspace::Workspace::test_new(name);
++        let id = ws.id.clone();
++        app.state.workspaces.push(ws);
++        id
++    }
++
++    fn push_internal_workspace(app: &mut App, name: &str) -> String {
++        let id = push_workspace(app, name);
++        app.state.global_pane.workspace_id = Some(id.clone());
++        id
++    }
++
++    #[test]
++    fn toggle_adopts_existing_internal_workspace() {
++        let mut app = test_app();
++        push_workspace(&mut app, "user");
++        push_internal_workspace(&mut app, "global");
++        app.state.active = Some(0);
++        app.state.selected = 0;
++
++        app.toggle_global_pane();
++        assert_eq!(app.state.workspaces.len(), 2);
++        assert!(app.state.global_pane_visible());
++        assert!(app.state.global_focus_active());
++
++        app.toggle_global_pane();
++        assert!(!app.state.global_pane_visible());
++        assert_eq!(app.state.active, Some(0));
++        assert_eq!(app.state.workspaces.len(), 2);
++    }
++
++    #[test]
++    fn focus_global_pane_flips_between_halves() {
++        let mut app = test_app();
++        push_workspace(&mut app, "user");
++        push_internal_workspace(&mut app, "global");
++        app.state.active = Some(0);
++        app.state.selected = 0;
++
++        app.focus_global_pane();
++        assert!(app.state.global_focus_active());
++        app.focus_global_pane();
++        assert!(app.state.global_pane_visible());
++        assert!(!app.state.global_focus_active());
++    }
++
++    #[test]
++    fn pane_focus_moves_between_dock_and_workspace() {
++        let mut app = test_app();
++        push_workspace(&mut app, "user");
++        push_internal_workspace(&mut app, "global");
++        app.state.active = Some(0);
++        app.state.selected = 0;
++        let user_pane = app.state.workspaces[0].tabs[0].root_pane;
++        let dock_pane = app.state.workspaces[1].tabs[0].root_pane;
++
++        assert_eq!(app.set_global_focus_for_pane(dock_pane), None);
++        app.toggle_global_pane();
++        assert_eq!(app.set_global_focus_for_pane(user_pane), Some(false));
++        assert!(!app.state.global_focus_active());
++        assert_eq!(app.set_global_focus_for_pane(dock_pane), Some(true));
++        assert!(app.state.global_focus_active());
++    }
++
++    #[test]
++    fn resize_sets_width_and_marks_session_dirty() {
++        let mut app = test_app();
++        push_workspace(&mut app, "user");
++        push_internal_workspace(&mut app, "global");
++        app.state.session_dirty = false;
++
++        app.resize_global_pane(44);
++        assert_eq!(app.state.global_pane.width, Some(44));
++        assert!(app.state.session_dirty);
++    }
++
++    #[test]
++    fn internal_workspace_is_never_switched_to() {
++        let mut app = test_app();
++        push_workspace(&mut app, "user");
++        push_internal_workspace(&mut app, "global");
++        app.state.active = Some(0);
++        app.state.selected = 0;
++
++        app.state.switch_workspace(1);
++        assert_eq!(app.state.active, Some(0));
++        assert!(!app.state.switch_workspace_tab(1, 0));
++    }
++
++    #[test]
++    fn sanitize_restored_selection_avoids_internal_workspace() {
++        let user = crate::workspace::Workspace::test_new("user");
++        let global = crate::workspace::Workspace::test_new("global");
++        let internal_id = global.id.clone();
++        let workspaces = [global, user];
++
++        let (active, selected) =
++            sanitize_restored_selection(&workspaces, Some(&internal_id), Some(0), 0);
++        assert_eq!(active, Some(1));
++        assert_eq!(selected, 1);
++
++        let (active, selected) = sanitize_restored_selection(&workspaces, None, Some(5), 9);
++        assert_eq!(active, Some(0));
++        assert_eq!(selected, 1);
++    }
++
++    #[test]
++    fn snapshot_round_trip_and_legacy_adoption() {
++        let mut app = test_app();
++        push_workspace(&mut app, "user");
++        let internal_id = push_internal_workspace(&mut app, "global");
++        app.state.global_pane.width = Some(44);
++
++        let snapshot = crate::persist::capture(
++            &app.state.workspaces,
++            &app.state.terminals,
++            &app.terminal_runtimes,
++            Some(0),
++            0,
++        )
++        .with_global_pane(&app.state);
++        let gp = snapshot
++            .global_pane
++            .as_ref()
++            .expect("global pane persisted");
++        assert_eq!(gp.workspace_id, internal_id);
++        assert_eq!(gp.width, Some(44));
++
++        let mut restored = test_app();
++        push_workspace(&mut restored, "user");
++        let mut global = crate::workspace::Workspace::test_new("restored-global");
++        global.id = internal_id.clone();
++        global.custom_name = Some("global".to_string());
++        restored.state.workspaces.push(global);
++        restore_session_fields(&mut restored.state, &snapshot);
++        assert_eq!(
++            restored.state.global_pane.workspace_id.as_deref(),
++            Some(internal_id.as_str())
++        );
++        assert_eq!(restored.state.global_pane.width, Some(44));
++        assert_eq!(restored.state.active, Some(0));
++
++        let mut legacy = snapshot;
++        legacy.global_pane = None;
++        let mut adopted = test_app();
++        push_workspace(&mut adopted, "user");
++        let mut global = crate::workspace::Workspace::test_new("old-global");
++        global.custom_name = Some("global".to_string());
++        let adopted_id = global.id.clone();
++        adopted.state.workspaces.push(global);
++        restore_session_fields(&mut adopted.state, &legacy);
++        assert_eq!(
++            adopted.state.global_pane.workspace_id.as_deref(),
++            Some(adopted_id.as_str())
++        );
++    }
++}
+diff --git c/src/app/mod.rs w/src/app/mod.rs
+index b327b5b..adf63eb 100644
+--- c/src/app/mod.rs
++++ w/src/app/mod.rs
+@@ -16,6 +16,7 @@ pub(crate) use api_helpers::limit_snapshot_lines;
+ mod creation;
+ mod custom_commands;
+ mod git_refresh;
++mod global_pane;
+ mod ids;
+ pub(crate) mod pane_graphics;
+ mod popup;
+@@ -370,8 +371,8 @@ impl App {
+         // Try to restore previous session
+         let mut restored_terminals = std::collections::HashMap::new();
+         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+-        let (workspaces, active, selected) = if !policy.restore_session {
+-            (Vec::new(), None, 0)
++        let (workspaces, active, selected, global_pane_restore) = if !policy.restore_session {
++            (Vec::new(), None, 0, (None, None))
+         } else if let Some(snap) = crate::persist::load() {
+             let history = config
+                 .experimental
+@@ -395,15 +396,21 @@ impl App {
+             restored_terminal_runtimes = terminal_runtimes.into();
+             if ws.is_empty() {
+                 crate::logging::session_restored(0, "empty");
+-                (Vec::new(), None, 0)
++                (Vec::new(), None, 0, (None, None))
+             } else {
+                 crate::logging::session_restored(ws.len(), "ok");
+-                let active = snap.active.filter(|&i| i < ws.len());
+-                let selected = snap.selected.min(ws.len().saturating_sub(1));
+-                (ws, active, selected)
++                let internal_id = global_pane::snapshot_internal_id(&snap, &ws);
++                let (active, selected) = global_pane::sanitize_restored_selection(
++                    &ws,
++                    internal_id.as_deref(),
++                    snap.active,
++                    snap.selected,
++                );
++                let width = snap.global_pane.as_ref().and_then(|gp| gp.width);
++                (ws, active, selected, (internal_id, width))
+             }
+         } else {
+-            (Vec::new(), None, 0)
++            (Vec::new(), None, 0, (None, None))
+         };
+ 
+         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
+@@ -516,6 +523,12 @@ impl App {
+             installed_plugins: load_plugin_registry(policy.persist_plugin_registry),
+             plugin_panes: std::collections::HashMap::new(),
+             popup_pane: None,
++            global_pane: global_pane::GlobalPane {
++                workspace_id: global_pane_restore.0,
++                config: config.global_pane.clone(),
++                width: global_pane_restore.1,
++                ..Default::default()
++            },
+             plugin_command_logs: Vec::new(),
+             next_plugin_command_log_id: 1,
+             plugin_commands_in_flight: 0,
+@@ -661,12 +674,7 @@ impl App {
+         app.state.workspaces = workspaces;
+         app.state.terminals = terminals;
+         app.terminal_runtimes = runtimes.into();
+-        app.state.active = snapshot
+-            .active
+-            .filter(|&idx| idx < app.state.workspaces.len());
+-        app.state.selected = snapshot
+-            .selected
+-            .min(app.state.workspaces.len().saturating_sub(1));
++        global_pane::restore_session_fields(&mut app.state, &snapshot);
+         app.state.mode = if app.state.active.is_some() {
+             state::Mode::Terminal
+         } else {
+@@ -937,6 +945,10 @@ impl App {
+             self.refresh_effective_app_theme();
+         }
+ 
++        if !invalid_section("global_pane") {
++            self.state.global_pane.config = config.global_pane.clone();
++        }
++
+         let status = if diagnostics.is_empty() {
+             crate::config::ConfigReloadStatus::Applied
+         } else {
+diff --git c/src/app/session.rs w/src/app/session.rs
+index 49dca91..690349e 100644
+--- c/src/app/session.rs
++++ w/src/app/session.rs
+@@ -47,7 +47,8 @@ impl App {
+                 &self.terminal_runtimes,
+                 self.state.active,
+                 self.state.selected,
+-            );
++            )
++            .with_global_pane(&self.state);
+             let history = self.persist_pane_history.then(|| {
+                 crate::persist::capture_history(&self.state.workspaces, &self.terminal_runtimes)
+             });
+diff --git c/src/app/state.rs w/src/app/state.rs
+index 892ec5e..f5932bf 100644
+--- c/src/app/state.rs
++++ w/src/app/state.rs
+@@ -876,6 +876,7 @@ pub struct AppState {
+     pub(crate) plugin_panes: std::collections::HashMap<PaneId, PluginPaneRecord>,
+     /// Session-modal terminal popup. This is intentionally outside workspace layouts.
+     pub(crate) popup_pane: Option<PopupPaneState>,
++    pub(crate) global_pane: crate::app::global_pane::GlobalPane,
+     /// Recent plugin action/event command executions.
+     pub(crate) plugin_command_logs: Vec<crate::api::schema::PluginCommandLogInfo>,
+     pub(crate) next_plugin_command_log_id: u64,
+@@ -1099,6 +1100,7 @@ impl AppState {
+             installed_plugins: std::collections::HashMap::new(),
+             plugin_panes: std::collections::HashMap::new(),
+             popup_pane: None,
++            global_pane: Default::default(),
+             plugin_command_logs: Vec::new(),
+             next_plugin_command_log_id: 1,
+             plugin_commands_in_flight: 0,
+diff --git c/src/client/endpoint/activation_tests.rs w/src/client/endpoint/activation_tests.rs
+index b66cb98..a9ddeb2 100644
+--- c/src/client/endpoint/activation_tests.rs
++++ w/src/client/endpoint/activation_tests.rs
+@@ -67,6 +67,7 @@ fn test_snapshot(boot_id: &str, revision: u64) -> crate::protocol::ClientShellSn
+         panes: Vec::new(),
+         agents: Vec::new(),
+         commands: Vec::new(),
++        global_pane: None,
+     }
+ }
+ 
+@@ -433,6 +434,7 @@ fn activation_requires_an_exact_snapshot_surface_revision_pair() {
+         panes: Vec::new(),
+         agents: Vec::new(),
+         commands: Vec::new(),
++        global_pane: None,
+     };
+     assert_eq!(
+         activation.receive_snapshot(&target, 7, &snapshot),
+diff --git c/src/client/shell/actions.rs w/src/client/shell/actions.rs
+index 834169f..d7b13a2 100644
+--- c/src/client/shell/actions.rs
++++ w/src/client/shell/actions.rs
+@@ -51,6 +51,24 @@ impl ClientShellState {
+                     self.focus_visible_notification(outcome);
+                     return;
+                 }
++                if action == crate::input::KeybindAction::ToggleGlobalPane {
++                    self.push_endpoint_method(
++                        crate::api::schema::Method::GlobalPaneToggle(
++                            crate::api::schema::EmptyParams::default(),
++                        ),
++                        outcome,
++                    );
++                    return;
++                }
++                if action == crate::input::KeybindAction::FocusGlobalPane {
++                    self.push_endpoint_method(
++                        crate::api::schema::Method::GlobalPaneFocus(
++                            crate::api::schema::EmptyParams::default(),
++                        ),
++                        outcome,
++                    );
++                    return;
++                }
+                 if action == crate::input::KeybindAction::ReloadConfig {
+                     self.push_endpoint_method_with_kind(
+                         crate::api::schema::Method::ServerReloadConfig(
+diff --git c/src/client/shell/composition.rs w/src/client/shell/composition.rs
+index a80ebb3..d1e4eff 100644
+--- c/src/client/shell/composition.rs
++++ w/src/client/shell/composition.rs
+@@ -197,6 +197,22 @@ impl ClientShellState {
+                 pixel_height: pane.pixel_height,
+             })
+             .collect();
++        self.hits.global_pane_separator = snapshot
++            .global_pane
++            .as_ref()
++            .and_then(|global_pane| {
++                let hit = self
++                    .hits
++                    .panes
++                    .iter()
++                    .find(|hit| hit.pane_id == global_pane.pane_id)?;
++                let column = match global_pane.position {
++                    crate::config::GlobalPanePosition::Left => hit.rect.right().checked_sub(1)?,
++                    crate::config::GlobalPanePosition::Right => hit.rect.x,
++                };
++                Some(Rect::new(column, hit.rect.y, 1, hit.rect.height))
++            })
++            .unwrap_or_default();
+         let topology_signature = pane_surface_topology_signature(surface);
+         self.hits.pane_splits = surface
+             .splits
+diff --git c/src/client/shell/mouse.rs w/src/client/shell/mouse.rs
+index cd4a6c1..7b0eaf2 100644
+--- c/src/client/shell/mouse.rs
++++ w/src/client/shell/mouse.rs
+@@ -20,6 +20,21 @@ impl ClientShellState {
+         }
+     }
+ 
++    fn global_pane_width_from_column(&self, column: u16) -> Option<u16> {
++        let global_pane = self.snapshot.as_ref()?.global_pane.as_ref()?;
++        let rect = self
++            .hits
++            .panes
++            .iter()
++            .find(|hit| hit.pane_id == global_pane.pane_id)?
++            .rect;
++        let width = match global_pane.position {
++            crate::config::GlobalPanePosition::Left => column.saturating_sub(rect.x) + 1,
++            crate::config::GlobalPanePosition::Right => rect.right().saturating_sub(column),
++        };
++        Some(width.max(1))
++    }
++
+     fn set_sidebar_section_from_row(&mut self, row: u16, outcome: &mut ClientShellInput) {
+         let divider = self.hits.sidebar_divider;
+         if divider.height == 0 {
+@@ -935,6 +950,23 @@ impl ClientShellState {
+                     self.set_sidebar_width_from_column(mouse.column, outcome);
+                     return;
+                 }
++                Some(ClientChromeDrag::GlobalPaneWidth { last_sent }) => {
++                    let last_sent = *last_sent;
++                    if let Some(width) = self.global_pane_width_from_column(mouse.column) {
++                        if last_sent != Some(width) {
++                            self.chrome_drag = Some(ClientChromeDrag::GlobalPaneWidth {
++                                last_sent: Some(width),
++                            });
++                            self.push_endpoint_method(
++                                crate::api::schema::Method::GlobalPaneResize(
++                                    crate::api::schema::GlobalPaneResizeParams { width },
++                                ),
++                                outcome,
++                            );
++                        }
++                    }
++                    return;
++                }
+                 Some(ClientChromeDrag::SidebarSection) => {
+                     self.set_sidebar_section_from_row(mouse.row, outcome);
+                     return;
+@@ -1253,6 +1285,7 @@ impl ClientShellState {
+                     ClientChromeDrag::SidebarWidth | ClientChromeDrag::SidebarSection => {
+                         self.persist_chrome_preferences(outcome);
+                     }
++                    ClientChromeDrag::GlobalPaneWidth { .. } => {}
+                     ClientChromeDrag::WorkspaceScrollbar { .. }
+                     | ClientChromeDrag::AgentScrollbar { .. }
+                     | ClientChromeDrag::HelpScrollbar { .. }
+@@ -1714,6 +1747,21 @@ impl ClientShellState {
+                         });
+                         return;
+                     }
++                    let dock_owns_click = mouse.modifiers.is_empty()
++                        && self
++                            .snapshot
++                            .as_deref()
++                            .and_then(|snapshot| snapshot.global_pane.as_ref())
++                            .is_some_and(|global_pane| global_pane.pane_id == hit.pane_id);
++                    if dock_owns_click {
++                        self.push_endpoint_method(
++                            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
++                                pane_id: hit.pane_id,
++                            }),
++                            outcome,
++                        );
++                        return;
++                    }
+                 }
+                 if !self.config.mouse_capture {
+                     return;
+@@ -1844,6 +1892,10 @@ impl ClientShellState {
+                     }
+                     return;
+                 }
++                if super::contains(self.hits.global_pane_separator, point) {
++                    self.chrome_drag = Some(ClientChromeDrag::GlobalPaneWidth { last_sent: None });
++                    return;
++                }
+                 if super::contains(self.hits.sidebar_section_divider, point) {
+                     self.chrome_drag = Some(ClientChromeDrag::SidebarSection);
+                     self.set_sidebar_section_from_row(mouse.row, outcome);
+diff --git c/src/client/shell/render.rs w/src/client/shell/render.rs
+index ad9ac8b..c4d3bee 100644
+--- c/src/client/shell/render.rs
++++ w/src/client/shell/render.rs
+@@ -298,6 +298,7 @@ pub(super) fn render_shell(
+         );
+     }
+     if !config.mouse_capture {
++        hits.global_pane_separator = Rect::default();
+         hits.sidebar_divider = Rect::default();
+         hits.sidebar_section_divider = Rect::default();
+         hits.workspace_scrollbar = Rect::default();
+diff --git c/src/client/shell/state.rs w/src/client/shell/state.rs
+index 81845d3..cf2c374 100644
+--- c/src/client/shell/state.rs
++++ w/src/client/shell/state.rs
+@@ -156,6 +156,7 @@ pub(super) struct ShellHitMap {
+     pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
+     pub(super) agent_max_scroll: usize,
+     pub(super) agent_sort_toggle: Rect,
++    pub(super) global_pane_separator: Rect,
+     pub(super) sidebar_divider: Rect,
+     pub(super) sidebar_section_divider: Rect,
+     pub(super) sidebar_toggle: Rect,
+@@ -242,6 +243,9 @@ pub(super) struct ClientTabPress {
+ 
+ pub(super) enum ClientChromeDrag {
+     SidebarWidth,
++    GlobalPaneWidth {
++        last_sent: Option<u16>,
++    },
+     SidebarSection,
+     WorkspaceScrollbar {
+         grab_row_offset: u16,
+@@ -1172,6 +1176,19 @@ impl ClientShellState {
+     }
+ 
+     pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
++        let docked = self
++            .snapshot
++            .as_ref()
++            .and_then(|snapshot| snapshot.global_pane.as_ref())
++            .is_some();
++        if docked && cols > self.config.mobile_width_threshold {
++            return ClientShellLayout {
++                sidebar: Rect::default(),
++                tab_bar: Rect::default(),
++                mobile_header: Rect::default(),
++                pane_surface: Rect::new(0, 0, cols, rows),
++            };
++        }
+         self.config.layout(
+             cols,
+             rows,
+diff --git c/src/client/shell/tests/mod.rs w/src/client/shell/tests/mod.rs
+index 497ce2c..b69e475 100644
+--- c/src/client/shell/tests/mod.rs
++++ w/src/client/shell/tests/mod.rs
+@@ -62,6 +62,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
+         }],
+         agents: Vec::new(),
+         commands: Vec::new(),
++        global_pane: None,
+     }
+ }
+ 
+diff --git c/src/config.rs w/src/config.rs
+index 60a22a1..c5e7691 100644
+--- c/src/config.rs
++++ w/src/config.rs
+@@ -1,5 +1,6 @@
+ use crossterm::event::{KeyCode, KeyModifiers};
+ 
++mod global_pane;
+ mod io;
+ mod keybinds;
+ mod model;
+@@ -11,6 +12,7 @@ mod window_title;
+ mod write;
+ 
+ pub use self::{
++    global_pane::{GlobalPaneConfig, GlobalPanePosition},
+     io::{
+         config_diagnostic_summary, config_dir, config_path, load_live_config,
+         remove_keybinding_config_sections, remove_section_key, state_dir, upsert_section_bool,
+diff --git c/src/config/global_pane.rs w/src/config/global_pane.rs
+new file mode 100644
+index 0000000..fc9ccca
+--- /dev/null
++++ w/src/config/global_pane.rs
+@@ -0,0 +1,20 @@
++use serde::{Deserialize, Serialize};
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
++#[serde(rename_all = "snake_case")]
++pub enum GlobalPanePosition {
++    #[default]
++    Left,
++    Right,
++}
++
++#[derive(Debug, Clone, Default, Deserialize)]
++#[serde(default)]
++pub struct GlobalPaneConfig {
++    /// Edge the global pane docks to. Default: left.
++    pub position: GlobalPanePosition,
++    /// Initial width, as cells or "33%" of the frame. Default: a third.
++    pub size: Option<crate::popup_size::PopupSize>,
++    /// Working directory. Empty inherits the server process directory.
++    pub cwd: String,
++}
+diff --git c/src/config/io.rs w/src/config/io.rs
+index 898cf07..a4c81ee 100644
+--- c/src/config/io.rs
++++ w/src/config/io.rs
+@@ -7,6 +7,7 @@ use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
+ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
+     "advanced",
+     "experimental",
++    "global_pane",
+     "keys",
+     "onboarding",
+     "remote",
+@@ -349,6 +350,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
+         &mut invalid_sections,
+         |section| config.remote = section,
+     );
++    load_live_section(
++        table,
++        "global_pane",
++        "global pane config",
++        &mut diagnostics,
++        &mut invalid_sections,
++        |section| config.global_pane = section,
++    );
+ 
+     diagnostics.extend(config.theme.diagnostics());
+ 
+diff --git c/src/config/keybinds.rs w/src/config/keybinds.rs
+index bec1af6..df44622 100644
+--- c/src/config/keybinds.rs
++++ w/src/config/keybinds.rs
+@@ -369,6 +369,8 @@ pub struct Keybinds {
+     pub resize_pane_up: ActionKeybinds,
+     pub resize_pane_right: ActionKeybinds,
+     pub toggle_sidebar: ActionKeybinds,
++    pub toggle_global_pane: ActionKeybinds,
++    pub focus_global_pane: ActionKeybinds,
+     pub custom_commands: Vec<CustomCommandKeybind>,
+ }
+ 
+@@ -537,6 +539,8 @@ impl Config {
+             resize_pane_up: empty_action!(),
+             resize_pane_right: empty_action!(),
+             toggle_sidebar: empty_action!(),
++            toggle_global_pane: empty_action!(),
++            focus_global_pane: empty_action!(),
+             custom_commands: Vec::new(),
+         };
+ 
+@@ -684,6 +688,8 @@ impl Config {
+             apply_action!(keybinds.resize_pane_up, resize_pane_up, source);
+             apply_action!(keybinds.resize_pane_right, resize_pane_right, source);
+             apply_action!(keybinds.toggle_sidebar, toggle_sidebar, source);
++            apply_action!(keybinds.toggle_global_pane, toggle_global_pane, source);
++            apply_action!(keybinds.focus_global_pane, focus_global_pane, source);
+ 
+             if source == field_source!(indexed) {
+                 append_legacy_indexed_bindings(
+diff --git c/src/config/model.rs w/src/config/model.rs
+index 604fe9a..9955b20 100644
+--- c/src/config/model.rs
++++ w/src/config/model.rs
+@@ -316,6 +316,7 @@ pub struct Config {
+     pub update: UpdateConfig,
+     pub keys: KeysConfig,
+     pub ui: UiConfig,
++    pub global_pane: super::GlobalPaneConfig,
+     pub worktrees: WorktreesConfig,
+     pub advanced: AdvancedConfig,
+     pub experimental: ExperimentalConfig,
+@@ -450,6 +451,10 @@ pub struct KeysConfig {
+     pub resize_pane_right: BindingConfig,
+     /// Toggle sidebar collapse. Default: "prefix+b"
+     pub toggle_sidebar: BindingConfig,
++    /// Toggle the session-global pane. Default: "prefix+f"
++    pub toggle_global_pane: BindingConfig,
++    /// Move focus between the global pane and the workspace pane. Default: "prefix+shift+f"
++    pub focus_global_pane: BindingConfig,
+     /// Optional indexed shortcuts expanded over number keys 1-9.
+     pub indexed: IndexedKeysConfig,
+     /// Prefix-mode custom command bindings.
+@@ -581,6 +586,10 @@ pub(crate) struct KeysConfigOverlay {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     toggle_sidebar: Option<BindingConfig>,
+     #[serde(skip_serializing_if = "Option::is_none")]
++    toggle_global_pane: Option<BindingConfig>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    focus_global_pane: Option<BindingConfig>,
++    #[serde(skip_serializing_if = "Option::is_none")]
+     indexed: Option<IndexedKeysConfig>,
+     #[serde(skip_serializing)]
+     command: Option<Vec<CommandKeybindConfig>>,
+@@ -668,6 +677,8 @@ impl<'de> Deserialize<'de> for KeysConfig {
+         apply_field!(resize_pane_up);
+         apply_field!(resize_pane_right);
+         apply_field!(toggle_sidebar);
++        apply_field!(toggle_global_pane);
++        apply_field!(focus_global_pane);
+         apply_field!(indexed);
+         apply_field!(command);
+ 
+@@ -772,6 +783,8 @@ impl KeysConfig {
+         copy_effective_action_field!(resize_pane_up, keybinds.resize_pane_up);
+         copy_effective_action_field!(resize_pane_right, keybinds.resize_pane_right);
+         copy_effective_action_field!(toggle_sidebar, keybinds.toggle_sidebar);
++        copy_effective_action_field!(toggle_global_pane, keybinds.toggle_global_pane);
++        copy_effective_action_field!(focus_global_pane, keybinds.focus_global_pane);
+         copy_user_field!(indexed);
+ 
+         profile
+@@ -1140,6 +1153,8 @@ impl Default for KeysConfig {
+             resize_pane_up: BindingConfig::empty(),
+             resize_pane_right: BindingConfig::empty(),
+             toggle_sidebar: BindingConfig::one("prefix+b"),
++            toggle_global_pane: BindingConfig::one("prefix+f"),
++            focus_global_pane: BindingConfig::one("prefix+shift+f"),
+             indexed: IndexedKeysConfig::default(),
+             command: Vec::new(),
+             user_fields: BTreeSet::new(),
+diff --git c/src/input/keybind_help.rs w/src/input/keybind_help.rs
+index e9462b9..754d490 100644
+--- c/src/input/keybind_help.rs
++++ w/src/input/keybind_help.rs
+@@ -177,6 +177,14 @@ pub(crate) fn keybind_help_groups(
+                     "resize pane right",
+                 ),
+                 entry(binding_label(&keybinds.toggle_sidebar), "toggle sidebar"),
++                entry(
++                    binding_label(&keybinds.toggle_global_pane),
++                    "toggle global pane",
++                ),
++                entry(
++                    binding_label(&keybinds.focus_global_pane),
++                    "focus global pane",
++                ),
+                 entry(binding_label(&keybinds.focus_pane_left), "focus pane left"),
+                 entry(binding_label(&keybinds.focus_pane_down), "focus pane down"),
+                 entry(binding_label(&keybinds.focus_pane_up), "focus pane up"),
+diff --git c/src/input/keybindings.rs w/src/input/keybindings.rs
+index d56de80..1bb3a84 100644
+--- c/src/input/keybindings.rs
++++ w/src/input/keybindings.rs
+@@ -60,6 +60,8 @@ pub(crate) enum KeybindAction {
+     ResizePaneUp,
+     ResizePaneRight,
+     ToggleSidebar,
++    ToggleGlobalPane,
++    FocusGlobalPane,
+     CyclePaneNext,
+     CyclePanePrevious,
+     LastPane,
+@@ -145,6 +147,11 @@ pub(crate) fn resolve_non_indexed_action(
+         (&keybinds.resize_pane_up, KeybindAction::ResizePaneUp),
+         (&keybinds.resize_pane_right, KeybindAction::ResizePaneRight),
+         (&keybinds.toggle_sidebar, KeybindAction::ToggleSidebar),
++        (
++            &keybinds.toggle_global_pane,
++            KeybindAction::ToggleGlobalPane,
++        ),
++        (&keybinds.focus_global_pane, KeybindAction::FocusGlobalPane),
+         (&keybinds.reload_config, KeybindAction::ReloadConfig),
+         (
+             &keybinds.open_notification_target,
+diff --git c/src/main.rs w/src/main.rs
+index cf7cf5b..71ed246 100644
+--- c/src/main.rs
++++ w/src/main.rs
+@@ -188,6 +188,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # resize_pane_up = ""     # optional, e.g. "ctrl+shift+alt+up"
+ # resize_pane_right = ""  # optional, e.g. "ctrl+shift+alt+right"
+ # toggle_sidebar = "prefix+b"
++# toggle_global_pane = "prefix+f"
++# focus_global_pane = "prefix+shift+f"
+ 
+ # Navigate-mode movement. These local shortcuts win while navigate mode is open.
+ # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
+@@ -431,6 +433,17 @@ pane_history = false
+ # Values: block, steady_block (default), underline, steady_underline, bar, steady_bar.
+ # cjk_ime_cursor_shape = "steady_block"
+ 
++# Session-global pane: toggle_global_pane docks the internal "global"
++# workspace's focused pane at the screen edge, replacing the sidebar and
++# tab bar while visible. Drag its separator column to resize.
++[global_pane]
++# Edge the global pane docks to: left or right.
++# position = "left"
++# Initial width, as cells or a percentage of the frame. Default: a third.
++# size = "33%"
++# Working directory for the global pane workspace.
++# cwd = ""
++
+ [advanced]
+ # Maximum scrollback buffer size in bytes retained per pane terminal.
+ # Matches Ghostty's default scrollback-limit behavior.
+diff --git c/src/persist.rs w/src/persist.rs
+index 822af26..5ac4a8e 100644
+--- c/src/persist.rs
++++ w/src/persist.rs
+@@ -14,6 +14,6 @@ pub use self::restore::restore;
+ #[cfg(unix)]
+ pub use self::restore::{handoff_pane_aliases, restore_handoff};
+ pub use self::snapshot::{
+-    capture, capture_history, DirectionSnapshot, LayoutSnapshot, SessionHistorySnapshot,
+-    SessionSnapshot, TabSnapshot, WorkspaceSnapshot,
++    capture, capture_history, DirectionSnapshot, GlobalPaneSnapshot, LayoutSnapshot,
++    SessionHistorySnapshot, SessionSnapshot, TabSnapshot, WorkspaceSnapshot,
+ };
+diff --git c/src/persist/io.rs w/src/persist/io.rs
+index 3344f5e..83206dd 100644
+--- c/src/persist/io.rs
++++ w/src/persist/io.rs
+@@ -205,6 +205,7 @@ mod tests {
+             active: None,
+             selected: 0,
+             sidebar_width: Some(26),
++            global_pane: None,
+             sidebar_section_split: Some(0.5),
+             collapsed_space_keys: std::collections::HashSet::new(),
+         }
+diff --git c/src/persist/restore.rs w/src/persist/restore.rs
+index 3c5775c..11d5fbd 100644
+--- c/src/persist/restore.rs
++++ w/src/persist/restore.rs
+@@ -1209,6 +1209,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: None,
++            global_pane: None,
+             sidebar_section_split: None,
+             collapsed_space_keys: Default::default(),
+         };
+@@ -1302,6 +1303,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: None,
++            global_pane: None,
+             sidebar_section_split: None,
+             collapsed_space_keys: Default::default(),
+         };
+@@ -1409,6 +1411,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: None,
++            global_pane: None,
+             sidebar_section_split: None,
+             collapsed_space_keys: Default::default(),
+         };
+@@ -1520,6 +1523,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: None,
++            global_pane: None,
+             sidebar_section_split: None,
+             collapsed_space_keys: Default::default(),
+         };
+@@ -1714,6 +1718,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: Some(26),
++            global_pane: None,
+             sidebar_section_split: Some(0.5),
+             collapsed_space_keys: Default::default(),
+         };
+diff --git c/src/persist/snapshot.rs w/src/persist/snapshot.rs
+index e6ca70f..10cd31f 100644
+--- c/src/persist/snapshot.rs
++++ w/src/persist/snapshot.rs
+@@ -23,11 +23,21 @@ pub struct SessionSnapshot {
+     #[serde(default)]
+     pub sidebar_width: Option<u16>,
+     #[serde(default)]
++    pub global_pane: Option<GlobalPaneSnapshot>,
++    #[serde(default)]
+     pub sidebar_section_split: Option<f32>,
+     #[serde(default)]
+     pub collapsed_space_keys: std::collections::HashSet<String>,
+ }
+ 
++/// Session-global pane dock: which workspace hosts it and its dragged width.
++#[derive(Serialize, Deserialize, Clone)]
++pub struct GlobalPaneSnapshot {
++    pub workspace_id: String,
++    #[serde(default)]
++    pub width: Option<u16>,
++}
++
+ #[derive(Serialize, Deserialize)]
+ pub struct SessionHistorySnapshot {
+     /// Format version follows the matching session snapshot version.
+@@ -181,6 +191,8 @@ struct RawSessionSnapshot {
+     #[serde(default)]
+     sidebar_width: Option<u16>,
+     #[serde(default)]
++    global_pane: Option<GlobalPaneSnapshot>,
++    #[serde(default)]
+     sidebar_section_split: Option<f32>,
+     #[serde(default)]
+     collapsed_space_keys: std::collections::HashSet<String>,
+@@ -197,6 +209,7 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String>
+         active: raw.active,
+         selected: raw.selected,
+         sidebar_width: raw.sidebar_width,
++        global_pane: raw.global_pane,
+         sidebar_section_split: raw.sidebar_section_split,
+         collapsed_space_keys: raw.collapsed_space_keys,
+     })
+@@ -268,6 +281,7 @@ pub fn capture(
+         active,
+         selected,
+         sidebar_width: None,
++        global_pane: None,
+         sidebar_section_split: None,
+         collapsed_space_keys: std::collections::HashSet::new(),
+     }
+@@ -597,6 +611,7 @@ mod tests {
+             active: None,
+             selected: 0,
+             sidebar_width: Some(26),
++            global_pane: None,
+             sidebar_section_split: Some(0.5),
+             collapsed_space_keys: std::collections::HashSet::new(),
+         };
+@@ -684,6 +699,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: Some(26),
++            global_pane: None,
+             sidebar_section_split: Some(0.5),
+             collapsed_space_keys: std::collections::HashSet::new(),
+             version: SNAPSHOT_VERSION,
+@@ -1251,6 +1267,7 @@ mod tests {
+             active: Some(0),
+             selected: 0,
+             sidebar_width: Some(26),
++            global_pane: None,
+             sidebar_section_split: Some(0.5),
+             collapsed_space_keys: std::collections::HashSet::new(),
+         };
+diff --git c/src/protocol/endpoint.rs w/src/protocol/endpoint.rs
+index a70ef56..a0cd9ec 100644
+--- c/src/protocol/endpoint.rs
++++ w/src/protocol/endpoint.rs
+@@ -184,6 +184,7 @@ mod tests {
+             panes: Vec::new(),
+             agents: Vec::new(),
+             commands: Vec::new(),
++            global_pane: None,
+         }
+     }
+ 
+diff --git c/src/protocol/wire.rs w/src/protocol/wire.rs
+index 96881b1..7596acf 100644
+--- c/src/protocol/wire.rs
++++ w/src/protocol/wire.rs
+@@ -939,6 +939,14 @@ pub struct ClientShellSnapshot {
+     pub panes: Vec<ClientShellPane>,
+     pub agents: Vec<ClientShellAgent>,
+     pub commands: Vec<ClientShellCommand>,
++    #[serde(default)]
++    pub global_pane: Option<ClientShellGlobalPane>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct ClientShellGlobalPane {
++    pub pane_id: String,
++    pub position: crate::config::GlobalPanePosition,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+@@ -2685,6 +2693,7 @@ mod tests {
+                 action: ClientShellCommandAction::Shell,
+                 description: Some("deploy".into()),
+             }],
++            global_pane: None,
+         }));
+         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
+         let (decoded, _): (ServerMessage, _) =
+diff --git c/src/server/client_commands.rs w/src/server/client_commands.rs
+index 0af1fad..1115336 100644
+--- c/src/server/client_commands.rs
++++ w/src/server/client_commands.rs
+@@ -15,6 +15,9 @@ const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
+ const CLIENT_SHELL_METHODS: &[&str] = &[
+     "client_shell.surface.set",
+     "command.invoke",
++    "global_pane.focus",
++    "global_pane.resize",
++    "global_pane.toggle",
+     "integration.install",
+     "integration.list",
+     "layout.set_split_ratio",
+diff --git c/src/server/client_shell.rs w/src/server/client_shell.rs
+index 3747069..6f00567 100644
+--- c/src/server/client_shell.rs
++++ w/src/server/client_shell.rs
+@@ -11,6 +11,16 @@ pub(super) fn snapshot(
+     location: Option<&crate::server::clients::ClientShellLocation>,
+ ) -> protocol::ClientShellSnapshot {
+     let snapshot = app.session_snapshot();
++    let internal_workspace_id = app
++        .state
++        .internal_workspace_idx()
++        .map(|workspace_index| app.public_workspace_id(workspace_index));
++    let dock_pane_id = app
++        .state
++        .global_focus_active()
++        .then(|| app.state.global_pane_target())
++        .flatten()
++        .and_then(|(workspace_index, pane_id, _)| app.public_pane_id(workspace_index, pane_id));
+     let focused_workspace_id = location
+         .and_then(|location| location.focused_workspace_id.clone())
+         .or_else(|| snapshot.focused_workspace_id.clone());
+@@ -32,11 +42,13 @@ pub(super) fn snapshot(
+             app.public_pane_id(workspace_index, pane_id)
+         })
+         .or_else(|| snapshot.focused_pane_id.clone());
++    let focused_pane_id = dock_pane_id.or(focused_pane_id);
+     let workspaces = snapshot
+         .workspaces
+         .into_iter()
+         .zip(&app.state.workspaces)
+         .enumerate()
++        .filter(|(_, (_, state))| !app.state.is_internal_ws(state))
+         .map(|(workspace_index, (workspace, state))| {
+             let mut tokens = workspace.tokens.into_iter().collect::<Vec<_>>();
+             tokens.sort_by(|left, right| left.0.cmp(&right.0));
+@@ -84,6 +96,7 @@ pub(super) fn snapshot(
+                 .iter()
+                 .flat_map(|workspace| workspace.tabs.iter()),
+         )
++        .filter(|(tab, _)| Some(&tab.workspace_id) != internal_workspace_id.as_ref())
+         .map(|(tab, state)| {
+             let tab_id = tab.tab_id;
+             protocol::ClientShellTab {
+@@ -104,15 +117,17 @@ pub(super) fn snapshot(
+         .map(|pane| {
+             let pane_id = pane.pane_id;
+             let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
+-            let right_click_passthrough = app
+-                .parse_pane_id(&pane_id)
+-                .and_then(|(workspace_index, pane_id)| {
+-                    app.state
+-                        .workspaces
+-                        .get(workspace_index)?
+-                        .pane_state(pane_id)
+-                })
+-                .is_some_and(|pane| pane.right_click_passthrough);
++            let right_click_passthrough =
++                app.parse_pane_id(&pane_id)
++                    .is_some_and(|(workspace_index, pane_id)| {
++                        app.state.is_internal_idx(workspace_index)
++                            || app
++                                .state
++                                .workspaces
++                                .get(workspace_index)
++                                .and_then(|workspace| workspace.pane_state(pane_id))
++                                .is_some_and(|pane| pane.right_click_passthrough)
++                    });
+             protocol::ClientShellPane {
+                 pane_id,
+                 workspace_id: pane.workspace_id,
+@@ -128,6 +143,7 @@ pub(super) fn snapshot(
+     let agents = snapshot
+         .agents
+         .into_iter()
++        .filter(|agent| Some(&agent.workspace_id) != internal_workspace_id.as_ref())
+         .map(|agent| {
+             let pane_id = agent.pane_id;
+             let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
+@@ -240,6 +256,17 @@ pub(super) fn snapshot(
+         panes,
+         agents,
+         commands: app.client_shell_command_manifest(),
++        global_pane: app
++            .state
++            .global_pane_visible()
++            .then(|| app.state.global_pane_target())
++            .flatten()
++            .and_then(|(workspace_index, pane_id, _)| {
++                Some(protocol::ClientShellGlobalPane {
++                    pane_id: app.public_pane_id(workspace_index, pane_id)?,
++                    position: app.state.global_pane.config.position,
++                })
++            }),
+     }
+ }
+ 
+@@ -262,7 +289,7 @@ pub(super) fn render_pane_surface(
+     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
+     client_id: u64,
+ ) -> RenderedPaneSurface {
+-    let content_revisions_before = target
++    let mut content_revisions_before = target
+         .and_then(|target| {
+             let workspace = app.state.workspaces.get(target.workspace_index)?;
+             let tab = workspace.tabs.get(target.tab_index)?;
+@@ -283,16 +310,34 @@ pub(super) fn render_pane_surface(
+             )
+         })
+         .unwrap_or_default();
++    let dock = dock_geometry(app, area);
++    let dock_focused = dock.is_some() && app.state.global_focus_active();
++    if let Some(dock) = &dock {
++        if let Some(runtime) = app.terminal_runtimes.get(&dock.terminal_id) {
++            content_revisions_before.insert(dock.pane_id, runtime.content_seq());
++        }
++    }
++    let tab_area = dock.as_ref().map_or(area, |dock| dock.tab_area);
++    let dock_render = dock.as_ref().and_then(|dock| {
++        Some(crate::server::render_stream::DockRender {
++            runtime: app.terminal_runtimes.get(&dock.terminal_id)?,
++            inner: dock.inner,
++            separator_x: dock.separator_x,
++            focused: dock_focused,
++        })
++    });
+     let (buffer, cursor, hyperlinks, layout) =
+-        crate::server::render_stream::render_tab_surface_virtual(
++        crate::server::render_stream::render_tab_surface_virtual_with_dock(
+             &app.state,
+             &app.terminal_runtimes,
+             target,
+             area,
++            tab_area,
++            dock_render,
+             resize_panes,
+             cell_size,
+         );
+-    let panes = target
++    let mut panes: Vec<protocol::PaneSurfacePane> = target
+         .map(|target| {
+             let workspace_index = target.workspace_index;
+             layout
+@@ -340,7 +385,7 @@ pub(super) fn render_pane_surface(
+                                     viewport_rows: metrics.viewport_rows as u64,
+                                 },
+                             ),
+-                            focused: pane.is_focused,
++                            focused: pane.is_focused && !dock_focused,
+                             mouse_reporting,
+                             sgr_pixel_mouse,
+                             alternate_screen_active: runtime
+@@ -353,6 +398,50 @@ pub(super) fn render_pane_surface(
+                 .collect()
+         })
+         .unwrap_or_default();
++    if let Some(dock) = &dock {
++        if let Some((pane_id, runtime)) = app
++            .public_pane_id(dock.workspace_index, dock.pane_id)
++            .zip(app.terminal_runtimes.get(&dock.terminal_id))
++        {
++            let after = runtime.content_seq();
++            let content_revision = if content_revisions_before.get(&dock.pane_id).copied()
++                == Some(after)
++                && after.is_multiple_of(2)
++            {
++                after
++            } else {
++                after | 1
++            };
++            let (pixel_width, pixel_height) = if cell_size.is_known() {
++                (
++                    u32::from(dock.inner.width) * cell_size.width_px,
++                    u32::from(dock.inner.height) * cell_size.height_px,
++                )
++            } else {
++                (0, 0)
++            };
++            panes.push(protocol::PaneSurfacePane {
++                pane_id,
++                content_revision,
++                rect: dock.outer.into(),
++                inner_rect: dock.inner.into(),
++                scrollbar_rect: None,
++                scroll: runtime.scroll_metrics().map(|metrics| {
++                    protocol::PaneSurfaceScrollMetrics {
++                        offset_from_bottom: metrics.offset_from_bottom as u64,
++                        max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
++                        viewport_rows: metrics.viewport_rows as u64,
++                    }
++                }),
++                focused: dock_focused,
++                mouse_reporting: runtime.mouse_reporting_enabled(),
++                sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
++                alternate_screen_active: runtime.alternate_screen_active(),
++                pixel_width,
++                pixel_height,
++            });
++        }
++    }
+     let pane_frames = layout
+         .pane_infos
+         .iter()
+@@ -408,6 +497,34 @@ pub(super) fn render_pane_surface(
+     }
+ }
+ 
++pub(crate) struct DockGeometry {
++    pub(crate) workspace_index: usize,
++    pub(crate) pane_id: crate::layout::PaneId,
++    pub(crate) terminal_id: crate::terminal::TerminalId,
++    pub(crate) outer: Rect,
++    pub(crate) inner: Rect,
++    pub(crate) separator_x: u16,
++    pub(crate) tab_area: Rect,
++}
++
++pub(crate) fn dock_geometry(app: &app::App, area: Rect) -> Option<DockGeometry> {
++    if !app.state.global_pane_visible() {
++        return None;
++    }
++    let (workspace_index, pane_id, terminal_id) = app.state.global_pane_target()?;
++    let (outer, tab_area) = crate::ui::global_pane::layout(&app.state, area)?;
++    let inner = crate::ui::global_pane::inner(&app.state, outer)?;
++    Some(DockGeometry {
++        workspace_index,
++        pane_id,
++        terminal_id,
++        outer,
++        inner,
++        separator_x: crate::ui::global_pane::separator_x(&app.state, outer),
++        tab_area,
++    })
++}
++
+ fn render_popup_surface(
+     app: &app::App,
+     area: Rect,
+diff --git c/src/server/handoff.rs w/src/server/handoff.rs
+index 2cd1714..0637cb5 100644
+--- c/src/server/handoff.rs
++++ w/src/server/handoff.rs
+@@ -483,6 +483,7 @@ mod tests {
+             active: None,
+             selected: 0,
+             sidebar_width: None,
++            global_pane: None,
+             sidebar_section_split: None,
+             collapsed_space_keys: Default::default(),
+         }
+diff --git c/src/server/headless/client_views.rs w/src/server/headless/client_views.rs
+index 2257a05..425d09a 100644
+--- c/src/server/headless/client_views.rs
++++ w/src/server/headless/client_views.rs
+@@ -91,6 +91,43 @@ impl HeadlessServer {
+             .and_then(|target| self.tab_id_for_target(target))
+     }
+ 
++    fn dock_focus_target(&self) -> Option<ShellFocusTarget> {
++        if !self.app.state.global_focus_active() {
++            return None;
++        }
++        let (workspace_index, pane_id, _) = self.app.state.global_pane_target()?;
++        let tab_index = self
++            .app
++            .state
++            .workspaces
++            .get(workspace_index)?
++            .find_tab_index_for_pane(pane_id)?;
++        Some(ShellFocusTarget {
++            tab_id: self.app.public_tab_id(workspace_index, tab_index)?,
++            workspace_index,
++            pane_id,
++        })
++    }
++
++    fn shell_focus_tab_id_for_client(&self, client_id: u64) -> Option<String> {
++        let viewed = self.shell_tab_id_for_client(client_id)?;
++        Some(
++            self.dock_focus_target()
++                .map_or(viewed, |target| target.tab_id),
++        )
++    }
++
++    pub(super) fn shell_surface_areas(&self, client_id: u64) -> Option<(Rect, Option<Rect>, Rect)> {
++        let (cols, rows) = self.clients.get(&client_id)?.terminal_size;
++        let full = Rect::new(0, 0, cols, rows);
++        Some(
++            match crate::server::client_shell::dock_geometry(&self.app, full) {
++                Some(dock) => (full, Some(dock.outer), dock.tab_area),
++                None => (full, None, full),
++            },
++        )
++    }
++
+     fn client_shell_topology(&self) -> ClientShellTopology {
+         let focused_workspace_id = self
+             .app
+@@ -100,12 +137,14 @@ impl HeadlessServer {
+         let fallback_workspace_id = self
+             .app
+             .state
+-            .workspaces
+-            .first()
+-            .map(|_| self.app.public_workspace_id(0));
++            .first_visible_workspace_idx()
++            .map(|workspace_index| self.app.public_workspace_id(workspace_index));
+         let mut active_tab_ids = HashMap::new();
+         let mut tab_workspace_ids = HashMap::new();
+         for (workspace_index, workspace) in self.app.state.workspaces.iter().enumerate() {
++            if self.app.state.is_internal_idx(workspace_index) {
++                continue;
++            }
+             let workspace_id = self.app.public_workspace_id(workspace_index);
+             if let Some(tab_id) = self
+                 .app
+@@ -191,6 +230,9 @@ impl HeadlessServer {
+         let Some((workspace_index, _)) = self.app.parse_tab_id(tab_id) else {
+             return false;
+         };
++        if self.app.state.is_internal_idx(workspace_index) {
++            return false;
++        }
+         let workspace_id = self.app.public_workspace_id(workspace_index);
+         let Some(client) = self.clients.get_mut(&client_id) else {
+             return false;
+@@ -249,6 +291,7 @@ impl HeadlessServer {
+         matches!(
+             method,
+             Method::CommandInvoke(_)
++                | Method::GlobalPaneResize(_)
+                 | Method::LayoutSetSplitRatio(_)
+                 | Method::PaneClose(_)
+                 | Method::PaneCopyMotion(_)
+@@ -287,6 +330,7 @@ impl HeadlessServer {
+         matches!(
+             method,
+             Method::CommandInvoke(_)
++                | Method::GlobalPaneResize(_)
+                 | Method::LayoutSetSplitRatio(_)
+                 | Method::PaneClose(_)
+                 | Method::PaneEditScrollback(_)
+@@ -330,6 +374,9 @@ impl HeadlessServer {
+                 else {
+                     return false;
+                 };
++                if self.app.state.is_internal_idx(workspace_index) {
++                    return false;
++                }
+                 let workspace_id = self.app.public_workspace_id(workspace_index);
+                 let Some(client) = self.clients.get_mut(&client_id) else {
+                     return false;
+@@ -381,7 +428,9 @@ impl HeadlessServer {
+     }
+ 
+     pub(super) fn shell_focus_target(&self, client_id: u64) -> Option<ShellFocusTarget> {
+-        self.focus_target_for_surface(self.shell_target_for_client(client_id)?)
++        let viewed = self.shell_target_for_client(client_id)?;
++        self.dock_focus_target()
++            .or_else(|| self.focus_target_for_surface(viewed))
+     }
+ 
+     pub(super) fn focused_shell_tabs(&self) -> HashSet<String> {
+@@ -390,7 +439,7 @@ impl HeadlessServer {
+             .filter(|(_, client)| {
+                 client.is_active_shell_client() && client.outer_terminal_focus == Some(true)
+             })
+-            .filter_map(|(&client_id, _)| self.shell_tab_id_for_client(client_id))
++            .filter_map(|(&client_id, _)| self.shell_focus_tab_id_for_client(client_id))
+             .collect()
+     }
+ 
+@@ -493,6 +542,11 @@ impl HeadlessServer {
+         let Some(target) = self.shell_target_for_client(client_id) else {
+             return false;
+         };
++        if self.app.state.global_pane_claims_pane(pane_id) == Some(true)
++            && self.app.state.internal_workspace_idx() == Some(workspace_index)
++        {
++            return true;
++        }
+         if target.workspace_index != workspace_index {
+             return false;
+         }
+@@ -570,9 +624,20 @@ impl HeadlessServer {
+         } else {
+             crate::kitty_graphics::HostCellSize::default()
+         };
+-        let area = Rect::new(0, 0, cols, rows);
++        let Some((full_area, _, area)) = self.shell_surface_areas(client_id) else {
++            return false;
++        };
++        crate::ui::global_pane::resize(
++            &self.app.state,
++            &self.app.terminal_runtimes,
++            full_area,
++            cell_size,
++        );
+         if self.app_client_count() == 1 {
+             for (workspace_index, workspace) in self.app.state.workspaces.iter().enumerate() {
++                if self.app.state.is_internal_idx(workspace_index) {
++                    continue;
++                }
+                 for tab_index in 0..workspace.tabs.len() {
+                     crate::ui::resize_tab_surface(
+                         &self.app.state,
+diff --git c/src/server/headless/lifecycle.rs w/src/server/headless/lifecycle.rs
+index ab1448c..2552dfe 100644
+--- c/src/server/headless/lifecycle.rs
++++ w/src/server/headless/lifecycle.rs
+@@ -85,7 +85,8 @@ impl HeadlessServer {
+             &self.app.terminal_runtimes,
+             self.app.state.active,
+             self.app.state.selected,
+-        );
++        )
++        .with_global_pane(&self.app.state);
+ 
+         let mut handoff_entries = Vec::new();
+         for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {
+diff --git c/src/server/headless/render.rs w/src/server/headless/render.rs
+index 5e36be0..3253117 100644
+--- c/src/server/headless/render.rs
++++ w/src/server/headless/render.rs
+@@ -5,6 +5,15 @@ impl HeadlessServer {
+         &self,
+         client_id: u64,
+     ) -> Option<(&crate::terminal::TerminalRuntime, crate::layout::PaneId)> {
++        if self.app.state.global_focus_active() {
++            if let Some((_, pane_id, terminal_id)) = self.app.state.global_pane_target() {
++                return self
++                    .app
++                    .terminal_runtimes
++                    .get(&terminal_id)
++                    .map(|runtime| (runtime, pane_id));
++            }
++        }
+         if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
+             if let Some(popup) = &self.app.state.popup_pane {
+                 return self
+@@ -350,6 +359,9 @@ impl HeadlessServer {
+             if !client.is_active_shell_client() || client.writer.is_none() {
+                 return false;
+             }
++            if self.app.state.global_pane_claims_pane(pane_id) == Some(true) {
++                return true;
++            }
+             if self
+                 .app
+                 .state
+diff --git c/src/server/notifications.rs w/src/server/notifications.rs
+index 4ce33a2..0cce453 100644
+--- c/src/server/notifications.rs
++++ w/src/server/notifications.rs
+@@ -31,6 +31,7 @@ pub(crate) fn toast_message_from_state_change(
+         .workspaces
+         .iter()
+         .enumerate()
++        .filter(|(_, ws)| !state.is_internal_ws(ws))
+         .find_map(|(ws_idx, ws)| {
+             ws.tabs.iter().find_map(|tab| {
+                 let pane = tab.panes.get(&pane_id)?;
+diff --git c/src/server/render_stream.rs w/src/server/render_stream.rs
+index 41684c2..5295c1d 100644
+--- c/src/server/render_stream.rs
++++ w/src/server/render_stream.rs
+@@ -347,11 +347,21 @@ pub(crate) type RenderedTabSurface = (
+ );
+ 
+ /// Renders only the active tab's pane surface at an origin-relative client viewport.
+-pub(crate) fn render_tab_surface_virtual(
++pub(crate) struct DockRender<'a> {
++    pub(crate) runtime: &'a crate::terminal::TerminalRuntime,
++    pub(crate) inner: Rect,
++    pub(crate) separator_x: u16,
++    pub(crate) focused: bool,
++}
++
++#[allow(clippy::too_many_arguments)]
++pub(crate) fn render_tab_surface_virtual_with_dock(
+     app_state: &AppState,
+     terminal_runtimes: &TerminalRuntimeRegistry,
+     target: Option<crate::ui::TabSurfaceTarget>,
+-    area: Rect,
++    frame_area: Rect,
++    tab_area: Rect,
++    dock: Option<DockRender<'_>>,
+     resize_panes: bool,
+     cell_size: crate::kitty_graphics::HostCellSize,
+ ) -> RenderedTabSurface {
+@@ -359,7 +369,7 @@ pub(crate) fn render_tab_surface_virtual(
+         app_state,
+         terminal_runtimes,
+         target,
+-        area,
++        tab_area,
+         resize_panes,
+         cell_size,
+     );
+@@ -368,14 +378,33 @@ pub(crate) fn render_tab_surface_virtual(
+         pane_infos: &layout.pane_infos,
+         split_borders: &layout.split_borders,
+     };
+-    let cursor = crate::ui::tab_surface_cursor(app_state, terminal_runtimes, surface);
+-    let hyperlinks = crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, surface);
++    let dock_focused = dock.as_ref().is_some_and(|dock| dock.focused);
++    let cursor = match &dock {
++        Some(dock) if dock.focused => dock_cursor(dock),
++        _ => crate::ui::tab_surface_cursor(app_state, terminal_runtimes, surface),
++    };
++    let mut hyperlinks = crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, surface);
++    if let Some(dock) = &dock {
++        hyperlinks.extend(dock.runtime.visible_hyperlinks(dock.inner));
++    }
+ 
+-    let backend = CursorTrackingBackend::new(area.width, area.height);
++    let backend = CursorTrackingBackend::new(frame_area.width, frame_area.height);
+     let mut terminal = ratatui::Terminal::new(backend).expect("TestBackend::new should never fail");
+     terminal
+         .draw(|frame| {
+             crate::ui::render_tab_surface(app_state, terminal_runtimes, surface, frame);
++            if let Some(dock) = &dock {
++                let style = ratatui::style::Style::default().fg(app_state.palette.surface_dim);
++                let buf = frame.buffer_mut();
++                for y in frame_area.y..frame_area.y + frame_area.height {
++                    if let Some(cell) = buf.cell_mut((dock.separator_x, y)) {
++                        cell.set_symbol("│").set_style(style);
++                    }
++                }
++                let scrolled_back = crate::ui::pane_is_scrolled_back(dock.runtime);
++                dock.runtime
++                    .render(frame, dock.inner, dock_focused && !scrolled_back);
++            }
+         })
+         .expect("render to TestBackend should never fail");
+ 
+@@ -387,6 +416,19 @@ pub(crate) fn render_tab_surface_virtual(
+     )
+ }
+ 
++fn dock_cursor(dock: &DockRender<'_>) -> Option<CursorState> {
++    if dock.runtime.synchronized_output_active() {
++        return None;
++    }
++    let cursor = dock.runtime.cursor_state(dock.inner, true)?;
++    Some(CursorState {
++        x: cursor.x,
++        y: cursor.y,
++        visible: cursor.visible && !crate::ui::pane_is_scrolled_back(dock.runtime),
++        shape: cursor.shape,
++    })
++}
++
+ /// Renders one server-owned terminal directly for `terminal attach` clients.
+ pub(crate) fn render_terminal_virtual(
+     runtime: &crate::terminal::TerminalRuntime,
+diff --git c/src/ui.rs w/src/ui.rs
+index 141e09d..0ec28cc 100644
+--- c/src/ui.rs
++++ w/src/ui.rs
+@@ -1,5 +1,6 @@
+ use ratatui::layout::Rect;
+ 
++pub(crate) mod global_pane;
+ mod onboarding;
+ mod panes;
+ mod release_notes;
+diff --git c/src/ui/global_pane.rs w/src/ui/global_pane.rs
+new file mode 100644
+index 0000000..9e48fef
+--- /dev/null
++++ w/src/ui/global_pane.rs
+@@ -0,0 +1,134 @@
++//! Layout for the session-global pane dock.
++
++use ratatui::layout::Rect;
++
++use crate::app::AppState;
++use crate::config::GlobalPanePosition;
++use crate::terminal::TerminalRuntimeRegistry;
++
++pub(crate) const MIN_WIDTH: u16 = 20;
++pub(crate) const MIN_MAIN_WIDTH: u16 = 40;
++
++/// Frame-level dock into the sidebar's slot: (global rect, remaining area).
++/// `None` when the frame is too narrow to share.
++pub(crate) fn layout(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
++    if area.width < MIN_WIDTH + MIN_MAIN_WIDTH {
++        return None;
++    }
++    let width = app
++        .global_pane
++        .width
++        .or_else(|| {
++            app.global_pane
++                .config
++                .size
++                .map(|size| size.resolve(area.width))
++        })
++        .unwrap_or(area.width / 3)
++        .clamp(MIN_WIDTH, area.width - MIN_MAIN_WIDTH);
++    let rest = area.width - width;
++    Some(match app.global_pane.config.position {
++        GlobalPanePosition::Left => (
++            Rect::new(area.x, area.y, width, area.height),
++            Rect::new(area.x + width, area.y, rest, area.height),
++        ),
++        GlobalPanePosition::Right => (
++            Rect::new(area.x + rest, area.y, width, area.height),
++            Rect::new(area.x, area.y, rest, area.height),
++        ),
++    })
++}
++
++/// Terminal cells inside the dock: the inner-edge column is the separator.
++pub(crate) fn inner(app: &AppState, outer: Rect) -> Option<Rect> {
++    if outer.width < 2 || outer.height == 0 {
++        return None;
++    }
++    Some(match app.global_pane.config.position {
++        GlobalPanePosition::Left => Rect::new(outer.x, outer.y, outer.width - 1, outer.height),
++        GlobalPanePosition::Right => Rect::new(outer.x + 1, outer.y, outer.width - 1, outer.height),
++    })
++}
++
++pub(crate) fn separator_x(app: &AppState, outer: Rect) -> u16 {
++    match app.global_pane.config.position {
++        GlobalPanePosition::Left => outer.x + outer.width.saturating_sub(1),
++        GlobalPanePosition::Right => outer.x,
++    }
++}
++
++/// Sized even while hidden so toggling on needs no reflow.
++pub(crate) fn resize(
++    app: &AppState,
++    terminal_runtimes: &TerminalRuntimeRegistry,
++    area: Rect,
++    cell_size: crate::kitty_graphics::HostCellSize,
++) {
++    let Some((ws_idx, pane_id, terminal_id)) = app.global_pane_target() else {
++        return;
++    };
++    let Some((outer, _rest)) = layout(app, area) else {
++        return;
++    };
++    let Some(inner) = inner(app, outer) else {
++        return;
++    };
++    if app.direct_attach_resize_locks.contains(&terminal_id) {
++        return;
++    }
++    if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id) {
++        rt.resize(
++            inner.height,
++            inner.width,
++            cell_size.width_px,
++            cell_size.height_px,
++        );
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn layout_docks_left_by_default() {
++        let app = AppState::test_new();
++        let area = Rect::new(0, 0, 120, 40);
++        let (global, rest) = layout(&app, area).expect("layout");
++        assert_eq!(global, Rect::new(0, 0, 40, 40));
++        assert_eq!(rest, Rect::new(40, 0, 80, 40));
++        let inner = inner(&app, global).expect("inner");
++        assert_eq!(inner, Rect::new(0, 0, 39, 40));
++        assert_eq!(separator_x(&app, global), 39);
++    }
++
++    #[test]
++    fn layout_docks_right_with_dragged_width() {
++        let mut app = AppState::test_new();
++        app.global_pane.config.position = GlobalPanePosition::Right;
++        app.global_pane.width = Some(25);
++        let area = Rect::new(0, 0, 120, 40);
++        let (global, rest) = layout(&app, area).expect("layout");
++        assert_eq!(global, Rect::new(95, 0, 25, 40));
++        assert_eq!(rest, Rect::new(0, 0, 95, 40));
++        let inner = inner(&app, global).expect("inner");
++        assert_eq!(inner, Rect::new(96, 0, 24, 40));
++        assert_eq!(separator_x(&app, global), 95);
++    }
++
++    #[test]
++    fn layout_clamps_and_bails_when_narrow() {
++        let mut app = AppState::test_new();
++        app.global_pane.width = Some(500);
++        let area = Rect::new(0, 0, 100, 40);
++        let (global, _) = layout(&app, area).expect("layout");
++        assert_eq!(global.width, 100 - MIN_MAIN_WIDTH);
++
++        app.global_pane.width = Some(1);
++        let (global, _) = layout(&app, area).expect("layout");
++        assert_eq!(global.width, MIN_WIDTH);
++
++        let narrow = Rect::new(0, 0, MIN_WIDTH + MIN_MAIN_WIDTH - 1, 40);
++        assert!(layout(&app, narrow).is_none());
++    }
++}
+diff --git c/src/ui/sidebar.rs w/src/ui/sidebar.rs
+index 178bdb1..6e80add 100644
+--- c/src/ui/sidebar.rs
++++ w/src/ui/sidebar.rs
+@@ -83,6 +83,7 @@ pub(crate) fn agent_panel_entries_from(
+         .workspaces
+         .iter()
+         .enumerate()
++        .filter(|(_, workspace)| !app.is_internal_ws(workspace))
+         .flat_map(|(ws_idx, workspace)| {
+             workspace
+                 .pane_details(&app.terminals)

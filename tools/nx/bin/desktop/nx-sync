@@ -1,0 +1,4 @@
+#!/usr/bin/env fish
+
+cd ~/nx/tools/nx-syncers
+exec uv run -m nx.syncers $argv

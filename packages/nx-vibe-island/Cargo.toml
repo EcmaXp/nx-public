@@ -1,0 +1,13 @@
+[package]
+name = "nx-vibe-island"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+strip = true

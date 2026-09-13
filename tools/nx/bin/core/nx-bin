@@ -1,0 +1,79 @@
+#!/usr/bin/env fish
+# nx-bin: rebuild ~/.nx/{bin,fish,fish/completions}/ from manifests.
+
+function _refresh_kind --argument-names manifest target_subdir kind
+    set -l nx_dir "$HOME/.nx"
+    set -l manifest_file "$nx_dir/manifest/$manifest"
+    set -l target "$nx_dir/$target_subdir"
+    if not test -f "$manifest_file"
+        echo "nx-bin: missing manifest $manifest_file" >&2
+        return 1
+    end
+    rm -rf "$target"
+    mkdir -p "$target"
+    set -l seen
+    set -l count 0
+    for src in (cat "$manifest_file")
+        test -z "$src"; and continue
+        test -d "$src"; or continue
+        set -l files
+        if test "$kind" = completions
+            set files (find "$src" -mindepth 1 -maxdepth 1 -type f)
+        else
+            set files (find "$src" -type f -not -path "*/completions/*")
+        end
+        for f in $files
+            set -l name (basename "$f")
+            test "$name" = .gitkeep; and continue
+            contains -- "$name" $seen; and continue
+            ln -s "$f" "$target/$name"
+            set -a seen $name
+            set count (math $count + 1)
+        end
+    end
+    echo $count
+end
+
+function _refresh
+    set -l b (_refresh_kind bin bin bin); or return
+    set -l f (_refresh_kind fish fish fish); or return
+    set -l c (_refresh_kind fish-completions fish/completions completions); or return
+    echo "nx bin: refreshed $b bin / $f fish / $c completions"
+end
+
+function _status
+    set -l nx_dir "$HOME/.nx"
+    for t in bin fish fish-completions
+        set -l m "$nx_dir/manifest/$t"
+        if test -f "$m"
+            echo "manifest $t: $m"
+        else
+            echo "manifest $t: MISSING"
+        end
+    end
+    for sub in bin fish fish/completions
+        set -l d "$nx_dir/$sub"
+        if test -d "$d"
+            set -l n (count (find "$d" -mindepth 1 -maxdepth 1 -type l))
+            echo "$d: $n symlinks"
+        else
+            echo "$d: MISSING"
+        end
+    end
+end
+
+if test (count $argv) -eq 0
+    _status
+    exit 0
+end
+
+switch $argv[1]
+    case refresh
+        _refresh
+    case status
+        _status
+    case '*'
+        echo "nx-bin: unknown command: $argv[1]" >&2
+        echo "usage: nx-bin [refresh|status]" >&2
+        exit 1
+end

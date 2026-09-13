@@ -1,0 +1,17 @@
+#!/usr/bin/env -S just -f
+# nx-mise: mise management commands
+
+export JUST_JUSTFILE := justfile()
+
+# List all commands
+default:
+    @just --list
+
+# Install missing mise tools at locked versions
+install *args:
+    #!/usr/bin/env fish
+    MISE_GITHUB_TOKEN=(gh auth token) mise install -j 8 {{args}}
+
+# Relock misepkgs versions (alias for `nx lock mise`)
+lock *args:
+    nx lock mise {{args}}

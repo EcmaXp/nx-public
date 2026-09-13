@@ -1,0 +1,17 @@
+diff --git a/src/app/api.rs b/src/app/api.rs
+--- a/src/app/api.rs
++++ b/src/app/api.rs
+@@ -775,12 +775,7 @@ impl App {
+     }
+ 
+     pub(crate) fn accept_current_focus_without_events(&mut self) {
+-        self.last_focus = self.state.active.and_then(|idx| {
+-            self.state
+-                .workspaces
+-                .get(idx)
+-                .and_then(|workspace| workspace.focused_pane_id().map(|pane_id| (idx, pane_id)))
+-        });
++        self.accept_current_focus_with_api_events();
+     }
+ 
+     pub(crate) fn accept_current_focus_with_api_events(&mut self) {

@@ -1,0 +1,4 @@
+#!/usr/bin/env fish
+
+set NIX_FLAKE_PATH (readlink ~/nx || echo ~/nx)
+exec nix repl --expr "{ nix = builtins.getFlake (toString $NIX_FLAKE_PATH); }" $argv

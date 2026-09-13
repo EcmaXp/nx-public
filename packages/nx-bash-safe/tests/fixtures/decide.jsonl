@@ -1,0 +1,30 @@
+{"allow": false, "input": {"command": "git status", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "aws sts get-caller-identity", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "cd /tmp && gh pr view 123", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "git push origin main", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "rg foo src/", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "cd /tmp && ls", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "treefmt src/acme/cli.py", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "terraform validate", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": true, "input": {"command": "git status", "dangerouslyDisableSandbox": false}, "m": "", "r": "git status"}
+{"allow": true, "input": {"command": "rg foo src/"}, "m": "", "r": "rg"}
+{"allow": false, "input": {"command": "rm -rf /tmp/x", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "open report.html", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "herdr tab rename w1:t5 x", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": false, "input": {"command": "treefmt src/acme/cli.py"}, "m": "plan", "r": null}
+{"allow": true, "input": {"command": "treefmt src/acme/cli.py"}, "m": "", "r": "treefmt <paths>"}
+{"allow": false, "input": {"command": "terraform fmt"}, "m": "plan", "r": null}
+{"allow": true, "input": {"command": "terraform fmt"}, "m": "acceptEdits", "r": "terraform fmt"}
+{"allow": false, "input": {"command": "git fetch origin"}, "m": "plan", "r": null}
+{"allow": true, "input": {"command": "git fetch origin"}, "m": "", "r": "git fetch"}
+{"allow": true, "input": {"command": "git status"}, "m": "plan", "r": "git status"}
+{"allow": true, "input": {"command": "terraform validate"}, "m": "plan", "r": "terraform validate"}
+{"allow": true, "input": {"command": "python3 -m py_compile /tmp/claude/x.py"}, "m": "plan", "r": "py_compile in tmp"}
+{"allow": false, "input": {"command": "cd sub && treefmt x.py && git status"}, "m": "plan", "r": null}
+{"allow": true, "input": {"command": "curl -s https://example.com"}, "m": "", "r": "curl GET"}
+{"allow": false, "input": {"command": "curl -s https://example.com", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": true, "input": {"command": "terraform init -backend=false"}, "m": "", "r": "terraform init -backend=false"}
+{"allow": false, "input": {"command": "terraform init -backend=false", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": true, "input": {"command": "set -euo pipefail && rg foo src/"}, "m": "", "r": "set, rg"}
+{"allow": false, "input": {"command": "git -c core.fsmonitor=/tmp/evil status", "dangerouslyDisableSandbox": true}, "m": "", "r": null}
+{"allow": true, "input": {"command": "git -c core.fsmonitor=/tmp/evil status"}, "m": "", "r": "git status"}
