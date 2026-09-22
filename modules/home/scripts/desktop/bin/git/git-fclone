@@ -1,0 +1,36 @@
+#!/usr/bin/env fish
+set GIT_URL $argv[1]
+set GIT_GRAB_DIR (git grab -n $GIT_URL | awk '{print $4}')
+set GIT_NAME (echo $GIT_GRAB_DIR | awk -F / '{print $NF}')
+set GIT_CACHE_DIR $GIT_GRAB_DIR/caches
+set GIT_CACHE_FILE $GIT_CACHE_DIR/$(date -I).cache
+
+if test -e $GIT_NAME
+    echo "fatal: destination path '$GIT_NAME' already exists." >&2
+    exit 1
+end
+
+git grab -n $GIT_URL
+or exit 1
+
+if test ! -d $GIT_GRAB_DIR
+    git grab $GIT_URL -- --bare --filter=blob:none --single-branch --recurse-submodules --shallow-submodules
+    or rmdir $GIT_GRAB_DIR && exit 1
+end
+
+if test ! -f $GIT_CACHE_FILE
+    test ! -d $GIT_CACHE_DIR && mkdir $GIT_CACHE_DIR
+    find $GIT_CACHE_DIR -name "*.cache" -type f -delete
+    and pushd $GIT_GRAB_DIR
+    and git fetch origin HEAD
+    and git backfill
+    and touch $GIT_CACHE_FILE
+    and popd
+    or exit 1
+end
+
+GIT_LFS_SKIP_SMUDGE=1 git clone --reference $GIT_GRAB_DIR --filter=blob:none $GIT_URL $argv[2..]
+and pushd $GIT_GRAB_DIR
+and git backfill
+and popd
+or exit 1

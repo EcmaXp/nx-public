@@ -1,0 +1,590 @@
+#!/usr/bin/env -S just -f
+# nx-lock: Lock file update commands
+
+export JUST_JUSTFILE := justfile()
+
+commit := "true"
+cooldown := "7"
+
+# List all commands
+default:
+    @just --list
+
+# Update every lock: flake, uv, mise, skills (stops at the first failure)
+all: flake uv mise skills
+
+# Update flake.lock with a cooldown: pin each github input to the newest commit
+# at least `cooldown` days old (cooldown=0 disables). Auto-commits if changed.
+flake:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = ["httpx[socks]>=0.28"]
+    # ///
+    import base64
+    import json
+    import os
+    import re
+    import subprocess
+    import sys
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+
+    import httpx
+
+    flake = Path(os.environ["NH_FLAKE"])
+    should_commit = "{{commit}}" == "true"
+    cooldown_days = int("{{cooldown}}")
+
+    token = subprocess.run(
+        ["gh", "auth", "token"], capture_output=True, text=True
+    ).stdout.strip()
+
+    cutoff = (datetime.now(UTC) - timedelta(days=cooldown_days)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    nodes = json.loads((flake / "flake.lock").read_text())["nodes"]
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    overrides = []
+    if cooldown_days > 0:
+        print(f"cooldown: pinning github inputs to newest commit <= {cutoff}")
+        with httpx.Client(headers=headers, timeout=30, follow_redirects=True) as client:
+            for name, node in nodes["root"]["inputs"].items():
+                node_id = node[0] if isinstance(node, list) else node
+                original = nodes[node_id].get("original", {})
+                if original.get("type") != "github":
+                    continue
+                if pinned := original.get("rev"):
+                    print(f"  {name} -> pinned @ {pinned[:12]}, skipped")
+                    continue
+                # A version-shaped ref is a release tag, which pins as firmly as
+                # a rev; only a branch ref needs resolving to a commit.
+                if (tag := original.get("ref")) and re.fullmatch(r"v?\d[\d.]*", tag):
+                    print(f"  {name} -> pinned @ {tag}, skipped")
+                    continue
+                owner, repo = original["owner"], original["repo"]
+                params = {"until": cutoff, "per_page": 1}
+                if branch := original.get("ref"):
+                    params["sha"] = branch
+                url = f"https://api.github.com/repos/{owner}/{repo}/commits"
+                resp = client.get(url, params=params)
+                resp.raise_for_status()
+                commits = resp.json()
+                if not commits:
+                    print(
+                        f"  warn: no commit <= cutoff for {name}; leaving at branch HEAD",
+                        file=sys.stderr,
+                    )
+                    continue
+                sha = commits[0]["sha"]
+                print(f"  {name} -> {owner}/{repo} @ {sha[:12]} ({branch or 'default'})")
+                overrides += ["--override-input", name, f"github:{owner}/{repo}/{sha}"]
+
+    # mise ships prebuilt binaries, so packages/mise/default.nix pins a release
+    # tag plus a hash per platform rather than a flake input. Forward only: a
+    # pin fresher than the cooldown must not be dragged back to an older tag.
+    mise_nix = flake / "packages/mise/default.nix"
+    mise_text = mise_nix.read_text()
+    current = "v" + re.search(r'version = "([^"]+)"', mise_text).group(1)
+    resp = httpx.get(
+        "https://api.github.com/repos/jdx/mise/releases",
+        headers=headers,
+        params={"per_page": 100},
+        timeout=30,
+        follow_redirects=True,
+    )
+    resp.raise_for_status()
+    releases = [r for r in resp.json() if not (r["draft"] or r["prerelease"])]
+    tags = [r["tag_name"] for r in releases]
+    eligible = [r["tag_name"] for r in releases if r["published_at"] <= cutoff]
+    newest = eligible[0] if eligible else None
+    if not newest or current not in tags or tags.index(newest) >= tags.index(current):
+        print(f"  mise -> {current}, kept")
+    else:
+        sums = httpx.get(
+            f"https://github.com/jdx/mise/releases/download/{newest}/SHASUMS256.txt",
+            timeout=30,
+            follow_redirects=True,
+        )
+        sums.raise_for_status()
+        digests = {
+            name.removeprefix("./"): digest
+            for digest, name in (
+                line.split() for line in sums.text.splitlines() if line.strip()
+            )
+        }
+        for asset, old in re.findall(
+            r'name = "([^"]+)";\s*\n\s*hash = "([^"]+)";', mise_text
+        ):
+            digest = bytes.fromhex(digests[f"mise-{newest}-{asset}.tar.gz"])
+            mise_text = mise_text.replace(
+                old, "sha256-" + base64.b64encode(digest).decode()
+            )
+        mise_text = mise_text.replace(
+            f'version = "{current.removeprefix("v")}"',
+            f'version = "{newest.removeprefix("v")}"',
+        )
+        mise_nix.write_text(mise_text)
+        print(f"  mise -> jdx/mise @ {newest} (was {current})")
+
+    env = dict(os.environ)
+    if token:
+        env["NIX_CONFIG"] = f"access-tokens = github.com={token}"
+    subprocess.run(
+        ["nix", "flake", "update", *overrides, "--flake", str(flake)],
+        env=env,
+        check=True,
+    )
+
+    if should_commit:
+        paths = ["flake.lock", "packages/mise/default.nix"]
+        clean = subprocess.run(
+            ["git", "-C", str(flake), "diff", "--quiet", "--", *paths]
+        ).returncode == 0
+        if clean:
+            print("flake: no changes")
+        else:
+            date = datetime.now().strftime("%Y-%m-%d")
+            subprocess.run(
+                ["nx", "git", "commit", f"feat(lock): update @ {date}", *paths],
+                check=True,
+            )
+
+# Update mise lockfiles across the flake (auto-commits if changed)
+mise:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = [
+    #   "pydantic>=2",
+    #   "tomlkit>=0.13",
+    # ]
+    # ///
+    import os
+    import re
+    import subprocess
+    import sys
+    import tempfile
+    import tomllib
+    from datetime import datetime
+    from pathlib import Path
+
+    import tomlkit
+    from pydantic import BaseModel, Field, TypeAdapter
+
+
+    class NixConfig(BaseModel):
+        root: Path
+        configurations: dict[str, list[Path]]
+
+
+    class ConfigFile(BaseModel):
+        path: Path
+        text: str
+        tools: list[str] = Field(default_factory=list)
+
+
+    class MiseConfig(BaseModel):
+        path: Path
+        tools: list[str]
+
+
+    def read_bytes(path):
+        return path.read_bytes() if path.exists() else None
+
+
+    def collect(flake, config):
+        sources = {}
+        contexts = {}
+        jobs = {}
+        for profile, paths in config.configurations.items():
+            files = {}
+            for source in paths:
+                if not source.is_relative_to(config.root) or source.suffix != ".toml":
+                    raise SystemExit(f"config must be a TOML file in this flake: {source}")
+                path = (flake / source.relative_to(config.root)).resolve(strict=True)
+                if not path.is_relative_to(flake):
+                    raise SystemExit(f"config escapes the flake: {source}")
+                if path not in sources:
+                    text = path.read_bytes().decode()
+                    sources[path] = ConfigFile(
+                        path=path,
+                        text=text,
+                        tools=list(tomllib.loads(text).get("tools", {})),
+                    )
+                if source.name in files and files[source.name].path != path:
+                    raise SystemExit(f"duplicate config name in {profile}: {source.name}")
+                files[source.name] = sources[path]
+            settings = {name: source for name, source in files.items() if not source.tools}
+            for name, source in files.items():
+                if not source.tools:
+                    continue
+                target = source.path.with_suffix(".lock").resolve()
+                if not target.is_relative_to(flake):
+                    raise SystemExit(f"invalid lock target: {target}")
+                job = dict(sorted({**settings, name: source}.items()))
+                context = tuple((name, file.path) for name, file in job.items())
+                if target in contexts and contexts[target] != context:
+                    raise SystemExit(f"conflicting settings for {target} in {profile}")
+                contexts[target] = context
+                jobs[target] = job
+        return sources, dict(sorted(jobs.items()))
+
+
+    def write_atomic(path, data):
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=".nx-mise-", delete=False
+        ) as tmp:
+            temporary = Path(tmp.name)
+            try:
+                tmp.write(data)
+                tmp.flush()
+                temporary.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o644)
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+
+    def generate(target, files, before, scratch):
+        fragments = scratch / "conf.d"
+        fragments.mkdir()
+        for name, source in files.items():
+            (fragments / name).write_text(source.text)
+        (scratch / "miserc.toml").write_text("env_conf_d = true\n")
+        env = {
+            key: value for key, value in os.environ.items() if not key.startswith("MISE_")
+        }
+        env.update(
+            MISE_CONFIG_DIR=str(scratch),
+            MISE_SYSTEM_CONFIG_DIR=str(scratch / "system"),
+            MISE_STATE_DIR=str(scratch / "state"),
+            MISE_LOCKED="0",
+        )
+        token = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
+        if token.returncode == 0:
+            env["MISE_GITHUB_TOKEN"] = token.stdout.strip()
+
+        listing = subprocess.run(
+            ["mise", "config", "ls", "--json"],
+            cwd=scratch,
+            env=env,
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
+        ).stdout
+        owners = {}
+        for entry in TypeAdapter(list[MiseConfig]).validate_json(listing):
+            if entry.path.parent != fragments or entry.path.name not in files:
+                raise SystemExit(f"unexpected mise configuration: {entry.path}")
+            for tool in entry.tools:
+                if tool in owners:
+                    raise SystemExit(f"tool declared in multiple config files: {tool}")
+                owners[tool] = entry.path.name
+        if not owners:
+            return None
+
+        baseline = {}
+        if before is not None:
+            baseline = tomllib.loads(before.decode())
+            baseline["tools"] = {
+                tool: entries
+                for tool, entries in baseline.get("tools", {}).items()
+                if tool in owners
+            }
+
+        mise_lock = scratch / "mise.lock"
+        pins = {}
+        locked = baseline.get("tools", {})
+        for _ in range(len(locked) + 1):
+            if baseline:
+                mise_lock.write_text(tomlkit.dumps(baseline))
+            else:
+                mise_lock.unlink(missing_ok=True)
+            proc = subprocess.Popen(
+                ["mise", "lock", "--global", "--bump"],
+                cwd=scratch,
+                env=env,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            err = ""
+            for line in proc.stderr:
+                sys.stderr.write(line)
+                err += line
+            if proc.wait() == 0:
+                generated = tomllib.loads(mise_lock.read_text())
+                tool = next(
+                    (
+                        name
+                        for name, entries in generated.get("tools", {}).items()
+                        if any(entry.get("version") == "latest" for entry in entries)
+                    ),
+                    None,
+                )
+                if tool is None:
+                    break
+            else:
+                match = re.search(
+                    r"failed to resolve (\S+)@\S+ for "
+                    r"(?:lockfile\b|\S+; refusing to replace locked version\(s\))",
+                    err,
+                )
+                tool = match.group(1) if match else None
+            if not tool or tool in pins or tool not in locked or tool not in owners:
+                raise SystemExit(
+                    "mise lock failed" + (f": cannot pin {tool}" if tool else "")
+                )
+            config = fragments / owners[tool]
+            document = tomlkit.parse(config.read_text())
+            requests = document.get("tools", {})
+            keys = [key for key in requests if re.sub(r"\[.*?\]", "", key) == tool]
+            versions = {entry["version"] for entry in locked[tool]}
+            if (
+                len(keys) != 1
+                or len(versions) != 1
+                or "latest" in versions
+                or not isinstance(requests[keys[0]], str)
+            ):
+                raise SystemExit(f"mise lock failed: cannot safely pin {tool}")
+            pins[tool] = str(requests[keys[0]])
+            version = versions.pop()
+            requests[keys[0]] = version
+            config.write_text(tomlkit.dumps(document))
+            print(f"pinning unresolvable {tool} -> {version} (kept from existing lock)")
+        else:
+            raise SystemExit("mise lock failed: exhausted pin retries")
+
+        for attempt in range(3):
+            document = tomlkit.parse(mise_lock.read_text())
+            missing = sorted(
+                tool for tool in owners if not document.get("tools", {}).get(tool)
+            )
+            if not missing:
+                break
+            if attempt == 2:
+                raise SystemExit(f"mise lock incomplete: {', '.join(missing)}")
+            print(f"lock missing {', '.join(missing)}, re-running mise lock")
+            subprocess.run(["mise", "lock", "--global"], cwd=scratch, env=env, check=True)
+
+        if before is not None and document.get("lockfile_version", 0) != baseline.get(
+            "lockfile_version", 0
+        ):
+            raise SystemExit(f"mise lock changed the lockfile format unexpectedly: {target}")
+        extra = set(document.get("tools", {})) - owners.keys()
+        if extra:
+            raise SystemExit(
+                f"lock contains tools without config declarations: {', '.join(sorted(extra))}"
+            )
+        for tool, request in pins.items():
+            for entry in document["tools"][tool]:
+                if "specifiers" in entry:
+                    entry["specifiers"] = [request]
+
+        data = tomlkit.dumps(document).encode()
+        parsed = tomllib.loads(data.decode())
+        for tool, entries in parsed["tools"].items():
+            if (
+                not isinstance(entries, list)
+                or not entries
+                or any(
+                    not entry.get("version") or entry["version"] == "latest"
+                    for entry in entries
+                )
+            ):
+                raise SystemExit(f"invalid lock entries for {tool}")
+        if before is None or tomllib.loads(before.decode()) != parsed:
+            return data
+        return None
+
+
+    flake = Path(os.environ["NH_FLAKE"]).expanduser().resolve(strict=True)
+    nix_env = dict(
+        os.environ,
+        NX_LOCK_FLAKE=f"git+file://{flake}",
+    )
+    expression = """
+        let
+          flake = builtins.getFlake (builtins.getEnv "NX_LOCK_FLAKE");
+          collect = kind:
+            let configurations = flake.${kind} or {};
+            in builtins.listToAttrs (builtins.concatMap
+              (name:
+                let cfg = configurations.${name}.config.programs.mise or {};
+                in if cfg.enable or false then [{
+                  name = "${kind}.${name}";
+                  value = cfg.configFiles;
+                }] else [])
+              (builtins.attrNames configurations));
+        in {
+          root = flake.outPath;
+          configurations = collect "homeConfigurations"
+            // collect "nixosConfigurations"
+            // collect "darwinConfigurations";
+        }
+    """
+    result = subprocess.run(
+        ["nix", "eval", "--impure", "--json", "--expr", expression],
+        env=nix_env,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    config = NixConfig.model_validate_json(result.stdout)
+    sources, jobs = collect(flake, config)
+    if not jobs:
+        print("mise: no tool configuration files")
+        raise SystemExit(0)
+    originals = {target: read_bytes(target) for target in jobs}
+    updates = {}
+    with tempfile.TemporaryDirectory() as scratch:
+        for index, (target, files) in enumerate(jobs.items()):
+            print(f"locking {target.relative_to(flake)}", flush=True)
+            directory = Path(scratch) / str(index)
+            directory.mkdir()
+            data = generate(target, files, originals[target], directory)
+            if data is not None:
+                updates[target] = data
+    for source in sources.values():
+        if source.path.read_bytes() != source.text.encode():
+            raise SystemExit(f"configuration changed during lock generation: {source.path}")
+    for target, before in originals.items():
+        if read_bytes(target) != before:
+            raise SystemExit(f"lock changed during generation: {target}")
+    if not updates:
+        print("mise: no changes")
+    for path, data in updates.items():
+        write_atomic(path, data)
+        print(f"updated {path.relative_to(flake)}")
+    if "{{commit}}" == "true":
+        paths = [str(target.relative_to(flake)) for target in jobs]
+        if paths:
+            changed = set()
+            for args in (
+                ["diff", "--name-only", "-z", "HEAD"],
+                ["ls-files", "--others", "--exclude-standard", "-z"],
+            ):
+                output = subprocess.run(
+                    ["git", *args, "--", *paths],
+                    cwd=flake,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                ).stdout
+                changed.update(filter(None, output.split("\0")))
+            if changed:
+                date = datetime.now().strftime("%Y-%m-%d")
+                subprocess.run(
+                    [
+                        "nx",
+                        "git",
+                        "commit",
+                        f"feat(mise): update misepkgs @ {date}",
+                        *sorted(changed),
+                    ],
+                    cwd=flake,
+                    check=True,
+                )
+
+# Refresh vendored upstream agent skills (auto-commits if changed)
+skills:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = ["httpx>=0.28"]
+    # ///
+    import os
+    import subprocess
+    from datetime import datetime
+    from pathlib import Path
+
+    import httpx
+
+    flake = Path(os.environ["NH_FLAKE"])
+    should_commit = "{{commit}}" == "true"
+    plugin = "modules/home/programs/claude/code/plugins/nx/skills"
+
+    # Skills authored upstream and vendored verbatim; local edits are overwritten.
+    # Tracking a branch, not a release tag: herdr self-updates past the mise pin.
+    skills = {
+        "herdr": {
+            "url": "https://raw.githubusercontent.com/herdrdev/herdr/master/skills/herdr/SKILL.md",
+            "dest": f"{plugin}/herdr/SKILL.md",
+        },
+    }
+
+    updated = []
+    with httpx.Client(timeout=30, follow_redirects=True) as client:
+        for name, skill in skills.items():
+            dest = flake / skill["dest"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            before = dest.read_text() if dest.exists() else None
+
+            resp = client.get(skill["url"])
+            resp.raise_for_status()
+            dest.write_text(resp.text)
+            # Format now so the vendored copy is already treefmt-stable next refresh.
+            subprocess.run(["treefmt", "--quiet", skill["dest"]], cwd=flake, check=True)
+
+            # Dirty against HEAD, not just against this run: an earlier refresh
+            # left uncommitted, so it still belongs in the commit below.
+            dirty = subprocess.run(
+                ["git", "-C", str(flake), "status", "--porcelain", "--", skill["dest"]],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            if dest.read_text() != before:
+                print(f"  {name}: updated")
+            else:
+                print(f"  {name}: no changes" + (" (uncommitted)" if dirty else ""))
+            if dirty:
+                updated.append(name)
+
+    if not updated:
+        print("skills: no changes")
+    elif should_commit:
+        date = datetime.now().strftime("%Y-%m-%d")
+        subject = f"{updated[0]} skill" if len(updated) == 1 else "agent skills"
+        subprocess.run(
+            [
+                "nx",
+                "git",
+                "commit",
+                f"feat(claude): update {subject} @ {date}",
+                *(skills[n]["dest"] for n in updated),
+            ],
+            check=True,
+        )
+
+# Update uv.lock (auto-commits if changed)
+uv:
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = ">=3.14"
+    # dependencies = []
+    # ///
+    import os
+    import subprocess
+    from datetime import datetime
+    from pathlib import Path
+
+    flake = Path(os.environ["NH_FLAKE"])
+    should_commit = "{{commit}}" == "true"
+
+    subprocess.run(["uv", "lock", "--upgrade"], cwd=flake, check=True)
+
+    if should_commit:
+        clean = subprocess.run(
+            ["git", "-C", str(flake), "diff", "--quiet", "uv.lock"]
+        ).returncode == 0
+        if clean:
+            print("uv.lock: no changes")
+        else:
+            date = datetime.now().strftime("%Y-%m-%d")
+            subprocess.run(
+                ["nx", "git", "commit", f"feat(python): update uv.lock @ {date}", "uv.lock"],
+                check=True,
+            )

@@ -1,0 +1,21 @@
+[
+  {
+    "label": "workspace: open ghostty terminal",
+    "command": "_zed-tasks-workspace-open-app ghostty",
+    "hide": "always",
+    "reveal": "never"
+  },
+  {
+    "label": "workspace: open with lazygit",
+    "command": "lazygit",
+    "hide": "always",
+    "reveal": "never",
+    "reveal_target": "center"
+  },
+  {
+    "label": "workspace: open with fork",
+    "command": "_zed-tasks-workspace-open-app fork",
+    "hide": "always",
+    "reveal": "never"
+  }
+]

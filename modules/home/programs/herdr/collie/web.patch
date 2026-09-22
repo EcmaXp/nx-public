@@ -1,0 +1,266 @@
+diff --git a/web/index.html b/web/index.html
+index 37905bb..3fabcc9 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -28,7 +28,7 @@
+     <meta name="mobile-web-app-capable" content="yes" />
+     <meta
+       name="apple-mobile-web-app-status-bar-style"
+-      content="black-translucent"
++      content="black"
+     />
+     <meta name="apple-mobile-web-app-title" content="Collie" />
+     <title>Collie</title>
+diff --git a/web/src/components/composer.tsx b/web/src/components/composer.tsx
+index 25d000b..973581e 100644
+--- a/web/src/components/composer.tsx
++++ b/web/src/components/composer.tsx
+@@ -1063,7 +1063,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
+           // See `composing` on the props above: the inset reserves room for the home indicator, and
+           // while the keyboard is up the keyboard is already covering it. Paying it twice costs
+           // ~24px on the one screen that has none.
+-          composing ? "pb-2" : "pb-[calc(env(safe-area-inset-bottom)_+_0.5rem)]",
++          composing ? "pb-2" : "pb-[max(var(--app-sab),0.5rem)]",
+         )}
+       >
+         {/* Pending-send preview: visible from send until the mirror echoes back (or 6s). Shows the
+diff --git a/web/src/hooks/use-keyboard.test.ts b/web/src/hooks/use-keyboard.test.ts
+index 3e0cd78..0f6d630 100644
+--- a/web/src/hooks/use-keyboard.test.ts
++++ b/web/src/hooks/use-keyboard.test.ts
+@@ -1,6 +1,6 @@
+-import { describe, expect, it } from "vitest";
++import { describe, expect, it, vi } from "vitest";
+ 
+-import { keyboardLikelyOpen, nextKeyboardOpen } from "./use-keyboard";
++import { installViewportVars, keyboardLikelyOpen, nextKeyboardOpen } from "./use-keyboard";
+ 
+ describe("keyboardLikelyOpen", () => {
+   it("is closed when the height is unchanged", () => {
+@@ -56,3 +56,35 @@ describe("nextKeyboardOpen", () => {
+     expect(nextKeyboardOpen(true, baselineRaisedByUrlBar, 800)).toBe(false); // -80px
+   });
+ });
++
++it("shrinks the shell for the keyboard and restores it after close or rotation", () => {
++  const vv = Object.assign(new EventTarget(), { height: 800, width: 390, offsetTop: 0 });
++  const root = document.documentElement;
++  const height = vi.spyOn(root, "clientHeight", "get").mockReturnValue(800);
++  vi.stubGlobal("visualViewport", vv);
++  vi.useFakeTimers();
++  try {
++    installViewportVars();
++    vv.height = 480;
++    vv.dispatchEvent(new Event("resize"));
++    vi.advanceTimersToNextFrame();
++    expect(root.style.getPropertyValue("--app-kb")).toBe("320px");
++    expect(root.style.getPropertyValue("--app-sab")).toBe("0px");
++    vv.height = 800;
++    vv.dispatchEvent(new Event("resize"));
++    vi.advanceTimersToNextFrame();
++    expect(root.style.getPropertyValue("--app-kb")).toBe("");
++    expect(root.style.getPropertyValue("--app-sab")).toBe("");
++    vv.width = 800;
++    vv.height = 390;
++    vv.dispatchEvent(new Event("resize"));
++    vi.advanceTimersToNextFrame();
++    expect(root.style.getPropertyValue("--app-kb")).toBe("");
++  } finally {
++    height.mockRestore();
++    vi.unstubAllGlobals();
++    vi.useRealTimers();
++    root.style.removeProperty("--app-kb");
++    root.style.removeProperty("--app-sab");
++  }
++});
+diff --git a/web/src/hooks/use-keyboard.ts b/web/src/hooks/use-keyboard.ts
+index aaa2fbe..eee1996 100644
+--- a/web/src/hooks/use-keyboard.ts
++++ b/web/src/hooks/use-keyboard.ts
+@@ -65,6 +65,39 @@ export function nextKeyboardOpen(
+     : keyboardLikelyOpen(baselineHeight, currentHeight, KEYBOARD_MIN_PX);
+ }
+ 
++export function installViewportVars(): void {
++  const vv = window.visualViewport;
++  if (!vv) return;
++  const root = document.documentElement;
++  let baseline = vv.height;
++  let baselineWidth = vv.width;
++  let frame = 0;
++  const shrink = (keyboard: number) => {
++    root.style.setProperty("--app-kb", `${keyboard}px`);
++    root.style.setProperty("--app-sab", "0px");
++  };
++  const write = () => {
++    frame = 0;
++    if (vv.width !== baselineWidth) {
++      baselineWidth = vv.width;
++      baseline = vv.height;
++    }
++    baseline = Math.max(baseline, vv.height);
++    if (keyboardLikelyOpen(baseline, vv.height)) {
++      shrink(Math.max(0, root.clientHeight - vv.offsetTop - vv.height));
++    } else {
++      root.style.removeProperty("--app-kb");
++      root.style.removeProperty("--app-sab");
++    }
++  };
++  const schedule = () => {
++    if (!frame) frame = requestAnimationFrame(write);
++  };
++  write();
++  vv.addEventListener("resize", schedule);
++  vv.addEventListener("scroll", schedule);
++}
++
+ export function useKeyboardOpen(): boolean {
+   const [open, setOpen] = useState(false);
+   useEffect(() => {
+diff --git a/web/src/hooks/use-polling.ts b/web/src/hooks/use-polling.ts
+index 9edadb7..17f1dc6 100644
+--- a/web/src/hooks/use-polling.ts
++++ b/web/src/hooks/use-polling.ts
+@@ -42,7 +42,7 @@ import type { Scope } from "@/lib/scope";
+ export const BURST_MS = 300;
+ /** The gap while the operator follows a pane that has something to show — its agent is working, or
+  *  its mirror moved on the last poll. */
+-export const HOT_MS = 1500;
++export const HOT_MS = 500;
+ /** The home screen while an agent somewhere is working or blocked. Nobody is on a mirror, so there
+  *  is nothing to keep smooth; the herd's row still has to reflect a status change without feeling
+  *  stuck. */
+diff --git a/web/src/index.css b/web/src/index.css
+index d3613e6..c955ee3 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -377,7 +377,7 @@
+   --color-host-9: var(--host-9);
+ 
+   --font-mono:
+-    "Nerd Font Symbols", "JetBrains Mono", "Cascadia Mono", "Cascadia Code",
++    "Nerd Font Symbols", "JetBrains Mono", "D2Coding", "Cascadia Mono", "Cascadia Code",
+     "Roboto Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+     "Liberation Mono", monospace;
+ 
+@@ -439,6 +439,24 @@
+   unicode-range: U+F0000-F1AFF;
+ }
+ 
++@font-face {
++  font-family: "D2Coding";
++  src: url("/fonts/d2coding-1.3.2-text.woff2") format("woff2");
++  font-display: swap;
++  unicode-range: U+0020-007E, U+00A0-00FF, U+0100-017F, U+0370-03FF, U+0400-04FF, U+2000-206F,
++    U+2070-209F, U+20A0-20BF, U+2100-214F, U+2190-21FF, U+2200-22FF, U+2300-23FF, U+2500-257F,
++    U+2580-259F, U+25A0-25FF, U+2600-26FF, U+2700-27BF;
++  size-adjust: 120%;
++}
++@font-face {
++  font-family: "D2Coding";
++  src: url("/fonts/d2coding-1.3.2-hangul.woff2") format("woff2");
++  font-display: swap;
++  unicode-range: U+3130-318F, U+AC00-D7A3;
++  size-adjust: 120%;
++}
++
++
+ /* The UI typefaces — Space Grotesk (the default) and Aldrich, both bundled. The app's own voice,
+  * and NOTHING ELSE'S.
+  *
+@@ -629,9 +647,21 @@
+     /* Respect notches; keep the app glued to the viewport edges on mobile. */
+     -webkit-text-size-adjust: 100%;
+     -webkit-tap-highlight-color: transparent;
++    --app-kb: 0px;
++    --app-sab: env(safe-area-inset-bottom);
++    overflow: hidden;
++  }
++  @keyframes app-focus-without-scroll {
++    from {
++      opacity: 0;
++    }
++  }
++  input:focus,
++  textarea:focus {
++    animation: app-focus-without-scroll 0.02s step-end;
+   }
+   body {
+-    @apply bg-background text-foreground;
++    @apply bg-chrome text-foreground;
+     /* Spelled here rather than left to Tailwind's `--default-font-family`, so the app's face is a
+        fact you can read in this file instead of a preflight default you have to know about. */
+     font-family: var(--font-sans);
+diff --git a/web/src/lib/sw-routes.ts b/web/src/lib/sw-routes.ts
+index be7f38d..60aaca1 100644
+--- a/web/src/lib/sw-routes.ts
++++ b/web/src/lib/sw-routes.ts
+@@ -121,6 +121,8 @@ export const UI_FONT_URLS = ["/fonts/ui-space-grotesk-2.000-latin.woff2", DEFAUL
+ export const FONT_URLS = [
+   "/fonts/nerd-symbols-3.5.0-pua.woff2",
+   "/fonts/nerd-symbols-3.5.0-spua.woff2",
++  "/fonts/d2coding-1.3.2-text.woff2",
++  "/fonts/d2coding-1.3.2-hangul.woff2",
+   ...UI_FONT_URLS,
+ ] as const;
+ 
+diff --git a/web/src/main.tsx b/web/src/main.tsx
+index 17ccd28..b4b5f5a 100644
+--- a/web/src/main.tsx
++++ b/web/src/main.tsx
+@@ -2,6 +2,7 @@ import { StrictMode } from "react";
+ import { createRoot } from "react-dom/client";
+ 
+ import { App } from "./App";
++import { installViewportVars } from "./hooks/use-keyboard";
+ import { initDesign } from "./lib/design";
+ import { initOperatorFonts } from "./lib/operator-config";
+ import "./index.css";
+@@ -17,6 +18,7 @@ import "./lib/install";
+ // cases that script deliberately cannot — an operator-supplied face (no pre-paint path; it has no
+ // family name until /api/config answers) and Safari private mode, where the pre-paint read threw.
+ // Before createRoot, so the class is settled by the time anything measures a line box.
++installViewportVars();
+ initDesign();
+ // After it, and separately: this one injects the operator face design.ts mirrored into storage, so a
+ // device set to one paints in it from the first frame instead of swapping when /api/config lands.
+diff --git a/web/src/routes/root.tsx b/web/src/routes/root.tsx
+index f33d45e..c6751e9 100644
+--- a/web/src/routes/root.tsx
++++ b/web/src/routes/root.tsx
+@@ -95,7 +95,7 @@ export function RootLayout() {
+     // second derivation of it, so the tolerance can never be computed against a cadence we aren't
+     // using. That mattered more once the cadence gained inputs beyond the snapshot (#156).
+     <CrewProvider servers={data.servers} sessions={data.sessions} ts={data.ts} pollMs={pollMs}>
+-      <div className="flex h-[100dvh] flex-col overflow-hidden">
++      <div className="fixed inset-x-0 top-0 flex h-[calc(100dvh-var(--app-kb))] flex-col overflow-hidden bg-background">
+         {/* THE update band, and the only one: a release on offer, a confirm just tapped, a run in
+             flight, a new bridge this bundle is behind, and peers following — one fixed-height row
+             that says whichever of those is true. Mounted unconditionally so the bundle self-updater's
+@@ -149,7 +149,7 @@ export function BootSplash() {
+   const stuck = useConnectionLost(true);
+   if (!stuck) {
+     return (
+-      <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 text-muted-foreground">
++      <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 bg-background text-muted-foreground">
+         {/* The bloom: the same mark as the rest state below, but turning and at full chroma. It is
+             a COLOUR as well as motion, which is the half a reduced-motion reader still gets —
+             `prefers-reduced-motion` stops the orbit and cannot stop the accents. `paper` is this
+@@ -162,7 +162,7 @@ export function BootSplash() {
+     );
+   }
+   return (
+-    <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 p-6 text-center">
++    <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+       {/* Rest = the Collie mark still, muted (grayscale + dimmed) to read asleep
+           — never the gallop's own rest frame, whose full-stretch mid-stride pose looks frozen
+           mid-run. No `loading`: we have stopped trying, and a blooming mark would say otherwise.
+@@ -192,7 +192,7 @@ export function RootError() {
+   // language; anything else (a render-phase throw, a router error) keeps its own message.
+   const message = error instanceof Error ? describeThrownError(error) : t("error.root.unknown");
+   return (
+-    <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 p-6 text-center">
++    <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+       <p className="font-medium text-destructive">{t("error.root.title")}</p>
+       <p className="max-w-xs text-sm text-muted-foreground">{message}</p>
+       <button

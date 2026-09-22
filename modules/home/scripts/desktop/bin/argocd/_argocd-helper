@@ -1,0 +1,24 @@
+#!/usr/bin/env fish
+
+set HELM_COMMAND $argv[1]
+set HELM_ARGV $argv[3..]
+set APP_FILE $argv[2]
+
+if test -z $APP_FILE
+    echo "Usage: argocd-$HELM_COMMAND argocd-app.yaml [helm args ...]"
+    exit 2
+end
+
+set APP_FILE (realpath $APP_FILE)
+set APP_NAME (yq -r .metadata.name $APP_FILE)
+set APP_SOURCE_RELPATH (yq -r .spec.source.path $APP_FILE)
+set APP_VALUES_RELPATHS (yq -r .spec.source.helm.valueFiles[] $APP_FILE)
+
+set GIT_ROOT (pushd $APP_FILE/..; git rev-parse --show-toplevel; popd)
+set APP_SOURCE_PATH $GIT_ROOT/$APP_SOURCE_RELPATH
+for APP_VALUES_RELPATH in $APP_VALUES_RELPATHS
+    set -a APP_VALUES_ARGV $APP_VALUES_PATHS -f $APP_SOURCE_PATH/$APP_VALUES_RELPATH
+end
+
+echo "#" helm $HELM_COMMAND $APP_NAME $APP_SOURCE_PATH $APP_VALUES_ARGV $HELM_ARGV
+helm $HELM_COMMAND $APP_NAME $APP_SOURCE_PATH $APP_VALUES_ARGV $HELM_ARGV

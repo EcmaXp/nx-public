@@ -1,0 +1,38 @@
+# treefmt - One CLI to format the code tree
+# https://github.com/numtide/treefmt
+# https://treefmt.com/latest/getting-started/configure/
+
+excludes = []
+on-unmatched = "info"
+walk = "auto"
+
+[formatter.editorconfig]
+command = "eclint"
+options = ["-fix"]
+includes = ["*"]
+excludes = ["*.gitignore"]
+
+[formatter.nix]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.python-ruff-check]
+command = "ruff"
+options = ["check", "--fix"]
+includes = ["*.py"]
+
+[formatter.python-ruff-format]
+command = "ruff"
+options = ["format"]
+includes = ["*.py"]
+
+[formatter.markdown]
+command = "mdformat"
+includes = ["*.md"]
+
+# The edition pin stays because rustfmt still defaults to 2015 and would
+# misparse anything written for 2024.
+[formatter.rust]
+command = "rustfmt"
+options = ["--edition", "2024"]
+includes = ["*.rs"]

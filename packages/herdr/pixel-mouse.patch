@@ -1,0 +1,169 @@
+diff --git i/src/pane/input.rs w/src/pane/input.rs
+index 8de216e..c1b9a27 100644
+--- i/src/pane/input.rs
++++ w/src/pane/input.rs
+@@ -61,7 +61,7 @@ pub(super) fn ghostty_mods_from_key_modifiers(modifiers: crossterm::event::KeyMo
+ pub(super) fn ghostty_mouse_encoder_for_terminal(
+     terminal: &crate::ghostty::Terminal,
+     position: crate::input::mouse::Position,
+-) -> Option<crate::ghostty::MouseEncoder> {
++) -> Option<(crate::ghostty::MouseEncoder, (f32, f32))> {
+     let mut encoder = crate::ghostty::MouseEncoder::new().ok()?;
+     encoder.set_from_terminal(terminal);
+     let cols = terminal.cols().ok()? as u32;
+@@ -69,35 +69,42 @@ pub(super) fn ghostty_mouse_encoder_for_terminal(
+     let sgr_pixels = terminal
+         .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+         .ok()?;
++    let pixel_geometry = (|| {
++        let width_px = terminal.width_px().ok()?;
++        let height_px = terminal.height_px().ok()?;
++        (width_px > 0 && height_px > 0 && cols > 0 && rows > 0).then_some((
++            width_px,
++            height_px,
++            width_px / cols,
++            height_px / rows,
++        ))
++    })();
+     match position {
+-        crate::input::mouse::Position::Cell { .. } => {
++        crate::input::mouse::Position::Cell { column, row } => {
+             if sgr_pixels {
++                // An SGR-pixels pane divides every report by the in-band cell size,
++                // so a cell hit must arrive as that cell's centre pixel.
++                if let Some((width_px, height_px, cell_width, cell_height)) = pixel_geometry {
++                    encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR_PIXELS);
++                    encoder.set_size(width_px, height_px, cell_width, cell_height);
++                    let x = u32::from(column) * cell_width + cell_width / 2;
++                    let y = u32::from(row) * cell_height + cell_height / 2;
++                    return Some((encoder, (x as f32, y as f32)));
++                }
+                 encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR);
+             }
+             encoder.set_size(cols, rows, 1, 1);
++            Some((encoder, (f32::from(column), f32::from(row))))
+         }
+-        crate::input::mouse::Position::Pixels { .. } => {
++        crate::input::mouse::Position::Pixels { x, y } => {
+             if sgr_pixels {
+                 encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR_PIXELS);
+             }
+-            let width_px = terminal.width_px().ok()?;
+-            let height_px = terminal.height_px().ok()?;
+-            if width_px == 0 || height_px == 0 || cols == 0 || rows == 0 {
+-                return None;
+-            }
+-            encoder.set_size(width_px, height_px, width_px / cols, height_px / rows);
++            let (width_px, height_px, cell_width, cell_height) = pixel_geometry?;
++            encoder.set_size(width_px, height_px, cell_width, cell_height);
++            Some((encoder, (x as f32, y as f32)))
+         }
+     }
+-    Some(encoder)
+-}
+-
+-pub(super) fn ghostty_mouse_position_for_terminal(
+-    position: crate::input::mouse::Position,
+-) -> Option<(f32, f32)> {
+-    match position {
+-        crate::input::mouse::Position::Pixels { x, y } => Some((x as f32, y as f32)),
+-        crate::input::mouse::Position::Cell { column, row } => Some((column as f32, row as f32)),
+-    }
+ }
+ 
+ pub(super) fn ghostty_mouse_event_from_button_kind(
+@@ -345,3 +352,52 @@ fn ghostty_unshifted_ascii_pair(c: char) -> Option<char> {
+         _ => return None,
+     })
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn encode_left_press(terminal: &crate::ghostty::Terminal, column: u16, row: u16) -> Vec<u8> {
++        let position = crate::input::mouse::Position::Cell { column, row };
++        let (mut encoder, (x, y)) = ghostty_mouse_encoder_for_terminal(terminal, position).unwrap();
++        let mut event = ghostty_mouse_event_from_button_kind(
++            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
++            0,
++            0,
++            crossterm::event::KeyModifiers::empty(),
++        )
++        .unwrap();
++        event.set_position(x, y);
++        encoder.encode(&event).unwrap()
++    }
++
++    #[test]
++    fn sgr_pixels_pane_receives_cell_centre_in_pixels() {
++        let mut terminal = crate::ghostty::Terminal::new(120, 40, 0).unwrap();
++        terminal.resize(120, 40, 14, 30).unwrap();
++        terminal.write(b"\x1b[?1000h\x1b[?1006h\x1b[?1016h");
++        assert!(terminal
++            .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
++            .unwrap());
++
++        assert_eq!(encode_left_press(&terminal, 40, 20), b"\x1b[<0;567;615M");
++        assert_eq!(encode_left_press(&terminal, 0, 0), b"\x1b[<0;7;15M");
++    }
++
++    #[test]
++    fn sgr_pixels_pane_without_pixel_size_falls_back_to_cells() {
++        let mut terminal = crate::ghostty::Terminal::new(120, 40, 0).unwrap();
++        terminal.write(b"\x1b[?1000h\x1b[?1006h\x1b[?1016h");
++
++        assert_eq!(encode_left_press(&terminal, 40, 20), b"\x1b[<0;41;21M");
++    }
++
++    #[test]
++    fn sgr_cell_pane_keeps_cell_coordinates() {
++        let mut terminal = crate::ghostty::Terminal::new(120, 40, 0).unwrap();
++        terminal.resize(120, 40, 14, 30).unwrap();
++        terminal.write(b"\x1b[?1000h\x1b[?1006h");
++
++        assert_eq!(encode_left_press(&terminal, 40, 20), b"\x1b[<0;41;21M");
++    }
++}
+diff --git i/src/pane/terminal.rs w/src/pane/terminal.rs
+index 1dc5a88..279533d 100644
+--- i/src/pane/terminal.rs
++++ w/src/pane/terminal.rs
+@@ -24,8 +24,7 @@ use super::{
+     input::{
+         ghostty_key_event_from_terminal_key, ghostty_mouse_encoder_for_terminal,
+         ghostty_mouse_event_from_button_kind, ghostty_mouse_event_from_motion_kind,
+-        ghostty_mouse_event_from_wheel_kind, ghostty_mouse_position_for_terminal,
+-        ghostty_prefers_herdr_text_encoding,
++        ghostty_mouse_event_from_wheel_kind, ghostty_prefers_herdr_text_encoding,
+     },
+     kitty_keyboard::KittyKeyboardTracker,
+     osc::{
+@@ -2049,8 +2048,7 @@ impl GhosttyPaneTerminal {
+         if require_any_motion && !core.terminal.mode_get(MODE_MOUSE_ANY_MOTION).ok()? {
+             return None;
+         }
+-        let mut encoder = ghostty_mouse_encoder_for_terminal(&core.terminal, position)?;
+-        let (x, y) = ghostty_mouse_position_for_terminal(position)?;
++        let (mut encoder, (x, y)) = ghostty_mouse_encoder_for_terminal(&core.terminal, position)?;
+         event.set_position(x, y);
+         encoder
+             .encode(&event)
+@@ -5048,7 +5046,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn ghostty_mouse_sgr_pixels_preserves_exact_and_downgrades_cell_input() {
++    fn ghostty_mouse_sgr_pixels_preserves_exact_and_maps_cell_input_to_cell_centre() {
+         let (tx, _rx) = mpsc::channel(4);
+         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+         terminal.resize(80, 24, 10, 20).unwrap();
+@@ -5067,7 +5065,7 @@ mod tests {
+         );
+ 
+         assert_eq!(exact.as_deref(), Some(&b"\x1b[<35;48;139M"[..]));
+-        assert_eq!(fallback.as_deref(), Some(&b"\x1b[<35;5;7M"[..]));
++        assert_eq!(fallback.as_deref(), Some(&b"\x1b[<35;45;130M"[..]));
+     }
+ 
+     #[test]

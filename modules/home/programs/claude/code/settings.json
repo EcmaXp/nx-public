@@ -1,0 +1,431 @@
+{
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_BUG_COMMAND": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "attribution": {
+    "sessionUrl": false
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gomi:*)",
+      "Bash(rtk deps:*)",
+      "Bash(rtk diff:*)",
+      "Bash(rtk discover:*)",
+      "Bash(rtk du:*)",
+      "Bash(rtk find:*)",
+      "Bash(rtk gain:*)",
+      "Bash(rtk git branch)",
+      "Bash(rtk git diff:*)",
+      "Bash(rtk git log:*)",
+      "Bash(rtk git show:*)",
+      "Bash(rtk git status:*)",
+      "Bash(rtk gomi:*)",
+      "Bash(rtk grep:*)",
+      "Bash(rtk json:*)",
+      "Bash(rtk log:*)",
+      "Bash(rtk ls:*)",
+      "Bash(rtk pipe:*)",
+      "Bash(rtk read:*)",
+      "Bash(rtk session:*)",
+      "Bash(rtk wc:*)"
+    ],
+    "deny": [
+      "Bash(git add .)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(rm:*)",
+      "Bash(rtk git add .)",
+      "Bash(rtk git push --force:*)",
+      "Bash(rtk git push -f:*)",
+      "Bash(rtk rm:*)",
+      "WebFetch(domain:169.254.169.254)"
+    ],
+    "ask": [
+      "Bash(git commit --amend:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(rtk git commit --amend:*)",
+      "Bash(rtk git push --force-with-lease:*)",
+      "Bash(rtk git push:*)",
+      "Bash(rtk git reset:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "model": "claude-fable-5-1[1m]",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear|compact|fork)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/herdr-agent-state.sh\" session",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if command -v nx-quiet-hook >/dev/null 2>&1; then exec nx-quiet-hook claude; fi'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c '[ -x \"$HOME/.nx/bin/nx-session-reindex\" ] && nohup \"$HOME/.nx/bin/nx-session-reindex\" >/dev/null 2>&1 & exit 0'"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rtk hook claude"
+          },
+          {
+            "type": "command",
+            "command": "nx-bash-safe hook",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-comment-scan",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude",
+            "timeout": 86400
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if command -v nx-quiet-hook >/dev/null 2>&1; then exec nx-quiet-hook claude; fi'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-vibe-island --source claude"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-sidepulse-hook claude"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "nx-claude-statusline"
+  },
+  "enabledPlugins": {
+    "nx@nx": true,
+    "codex@openai-codex": true
+  },
+  "extraKnownMarketplaces": {
+    "nx": {
+      "source": {
+        "source": "directory",
+        "path": "/etc/nix-darwin"
+      }
+    },
+    "openai-codex": {
+      "source": {
+        "source": "github",
+        "repo": "openai/codex-plugin-cc"
+      }
+    }
+  },
+  "outputStyle": "Concise",
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "claude.internal"
+      ],
+      "allowUnixSockets": [
+        "~/.config/op/op-daemon.sock",
+        "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+      ],
+      "allowMachLookup": [
+        "2BUA8C4S2C.com.1password.browser-helper"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        "~/.cache/nx",
+        "~/.cache/uv",
+        "~/.config/op",
+        "~/.local/share/Trash",
+        "~/.local/state/nx",
+        "~/.terraform.d/plugin-cache",
+        "~/Library/Application Support/rtk",
+        "~/Library/Caches/mise",
+        "~/Library/Caches/treefmt",
+        "~/src"
+      ],
+      "allowRead": [
+        "~/Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/settings/policies.json"
+      ]
+    },
+    "enableWeakerNetworkIsolation": true,
+    "excludedCommands": [
+      "trash"
+    ]
+  },
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "high",
+  "tui": "fullscreen",
+  "autoMemoryEnabled": true,
+  "autoDreamEnabled": true,
+  "showThinkingSummaries": true,
+  "skipWorkflowUsageWarning": true,
+  "remoteControlAtStartup": false,
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true,
+  "useAutoModeDuringPlan": true
+}

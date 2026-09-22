@@ -1,0 +1,235 @@
+#!/usr/bin/env -S just -f
+# nx-icloud: iCloud Drive sync exclusion via com.apple.fileprovider.ignore#P
+
+export JUST_JUSTFILE := justfile()
+set positional-arguments
+
+# List all commands
+default:
+    @just --list
+
+# List known build/cache dirs and their sync state
+status *root:
+    @just _run status "$@"
+
+# Exclude paths from iCloud sync
+ignore +paths:
+    @just _run ignore "$@"
+
+# Restore paths to iCloud sync
+unignore +paths:
+    @just _run unignore "$@"
+
+# Mark every unmarked build/cache dir (dry run unless --apply)
+sweep *args:
+    @just _run sweep "$@"
+
+# Delete build/cache dirs untouched for --days (dry run unless --apply)
+clean *args:
+    @just _run clean "$@"
+
+[private]
+_run verb *args:
+    #!/usr/bin/env fish
+    set -g nx_icloud_xattr 'com.apple.fileprovider.ignore#P'
+
+    # unambiguous build/cache names, marked wherever they are found
+    set -g nx_icloud_patterns .direnv .mypy_cache .pytest_cache .ruff_cache .terraform .tox .venv __pycache__ node_modules target
+
+    # names that are junk in some repos and real source in others, so they are
+    # marked only where .gitignore confirms it
+    set -g nx_icloud_junk .gradle .idea .nuxt .vs Debug Logs Temp bin build dist obj
+
+    # editor state rather than rebuildable output, so never deleted by clean
+    set -g nx_icloud_config .idea .vs
+
+    function _resolve_root --argument-names root
+        if test -n "$root"
+            set -g nx_icloud_root "$root"
+            return 0
+        end
+        if set -q iCloud; and test -n "$iCloud"
+            set -g nx_icloud_root "$iCloud"
+            return 0
+        end
+        echo "nx-icloud: \$iCloud is not set and no root given" >&2
+        return 1
+    end
+
+    function _git_ignored --argument-names dir
+        git -C (dirname "$dir") check-ignore -q "$dir" 2>/dev/null
+    end
+
+    function _is_candidate --argument-names dir
+        set -l name (basename "$dir")
+        if contains -- "$name" $nx_icloud_patterns
+            # `target` is a build dir only next to a Cargo.toml or with cargo's
+            # own CACHEDIR.TAG; elsewhere it needs .gitignore to vouch for it
+            if test "$name" != target
+                return 0
+            end
+            if test -f (dirname "$dir")/Cargo.toml; or test -f "$dir/CACHEDIR.TAG"
+                return 0
+            end
+        end
+        _git_ignored "$dir"
+    end
+
+    function _find_matches --argument-names root
+        set -l expr
+        for name in $nx_icloud_patterns $nx_icloud_junk
+            set -a expr -o -name $name
+        end
+        set -e expr[1]
+        for dir in (find "$root" -name .git -prune -o '(' $expr ')' -type d -prune -print)
+            _is_candidate "$dir"; and echo "$dir"
+        end
+    end
+
+    function _is_ignored --argument-names path
+        xattr -p $nx_icloud_xattr "$path" >/dev/null 2>&1
+    end
+
+    function _mark --argument-names path
+        if _is_ignored "$path"
+            echo "  skip    $path"
+            return 0
+        end
+        if xattr -w $nx_icloud_xattr 1 "$path"
+            echo "  ignore  $path"
+            return 0
+        end
+        echo "nx-icloud: failed to mark: $path" >&2
+        return 1
+    end
+
+    function _unmark --argument-names path
+        if not _is_ignored "$path"
+            echo "  skip    $path"
+            return 0
+        end
+        if xattr -d $nx_icloud_xattr "$path"
+            echo "  sync    $path"
+            return 0
+        end
+        echo "nx-icloud: failed to unmark: $path" >&2
+        return 1
+    end
+
+    function _status
+        _resolve_root $argv[1]; or return 1
+        set -l total 0
+        set -l ignored 0
+        for dir in (_find_matches "$nx_icloud_root")
+            set total (math $total + 1)
+            if _is_ignored "$dir"
+                set ignored (math $ignored + 1)
+                echo "  ignored $dir"
+            else
+                echo "  synced  $dir"
+            end
+        end
+        echo "nx icloud: $ignored/$total ignored under $nx_icloud_root"
+    end
+
+    function _sweep
+        argparse apply -- $argv; or return 1
+        _resolve_root $argv[1]; or return 1
+        set -l pending
+        for dir in (_find_matches "$nx_icloud_root")
+            _is_ignored "$dir"; and continue
+            set -a pending "$dir"
+        end
+        if test (count $pending) -eq 0
+            echo "nx icloud: nothing to mark under $nx_icloud_root"
+            return 0
+        end
+        if not set -q _flag_apply
+            for dir in $pending
+                echo "  would ignore $dir"
+            end
+            echo "nx icloud: "(count $pending)" to mark under $nx_icloud_root, re-run with --apply"
+            return 0
+        end
+        set -l failed 0
+        for dir in $pending
+            _mark "$dir"; or set failed 1
+        end
+        return $failed
+    end
+
+    function _clean
+        argparse apply 'days=' 'exclude=+' -- $argv; or return 1
+        _resolve_root $argv[1]; or return 1
+        set -l days 30
+        set -q _flag_days; and set days $_flag_days
+        set -l stale
+        for dir in (_find_matches "$nx_icloud_root")
+            contains -- (basename "$dir") $nx_icloud_config; and continue
+            set -l skipped 0
+            for pattern in $_flag_exclude
+                string match -q "*$pattern*" -- "$dir"; and set skipped 1
+            end
+            test $skipped -eq 1; and continue
+            # one verdict per cache dir: any file touched within the window
+            # keeps the whole dir, and -quit stops at the first one
+            set -l recent (find "$dir" -type f -mtime -$days -print -quit 2>/dev/null)
+            test -n "$recent"; and continue
+            set -a stale "$dir"
+        end
+        if test (count $stale) -eq 0
+            echo "nx icloud: nothing older than $days days under $nx_icloud_root"
+            return 0
+        end
+        set -l size (du -shc $stale 2>/dev/null | tail -1 | cut -f1)
+        if not set -q _flag_apply
+            for dir in $stale
+                echo "  would delete $dir"
+            end
+            echo "nx icloud: "(count $stale)" to delete under $nx_icloud_root ($size), re-run with --apply"
+            return 0
+        end
+        set -l failed 0
+        for dir in $stale
+            if rm -rf "$dir"
+                echo "  delete  $dir"
+            else
+                echo "nx-icloud: failed to delete: $dir" >&2
+                set failed 1
+            end
+        end
+        echo "nx icloud: deleted "(count $stale)" dirs ($size) under $nx_icloud_root"
+        return $failed
+    end
+
+    function _apply_to_paths --argument-names action
+        set -l failed 0
+        for path in $argv[2..]
+            if not test -e "$path"
+                echo "nx-icloud: no such path: $path" >&2
+                set failed 1
+                continue
+            end
+            switch $action
+                case ignore
+                    _mark "$path"; or set failed 1
+                case unignore
+                    _unmark "$path"; or set failed 1
+            end
+        end
+        return $failed
+    end
+
+    switch $argv[1]
+        case status
+            _status $argv[2..]
+        case ignore unignore
+            _apply_to_paths $argv[1] $argv[2..]
+        case sweep
+            _sweep $argv[2..]
+        case clean
+            _clean $argv[2..]
+        case '*'
+            echo "nx-icloud: unknown command: $argv[1]" >&2
+            exit 1
+    end
