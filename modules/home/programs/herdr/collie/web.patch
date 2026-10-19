@@ -1,0 +1,379 @@
+diff --git a/web/index.html b/web/index.html
+index 1ce4341..7ac026a 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -30,7 +30,7 @@
+          iOS reads this once, at Add to Home Screen, so a change needs a re-add to show. -->
+     <meta
+       name="apple-mobile-web-app-status-bar-style"
+-      content="default"
++      content="black"
+     />
+     <meta name="apple-mobile-web-app-title" content="Collie" />
+     <!-- Where this document is mounted (ADR 0052). `/` as built; the bridge rewrites it, and every
+diff --git a/web/src/components/composer.tsx b/web/src/components/composer.tsx
+index 0735e0a..f5731e5 100644
+--- a/web/src/components/composer.tsx
++++ b/web/src/components/composer.tsx
+@@ -811,7 +811,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
+   const takeoverOpen = recorder.busy;
+   // The block's bottom padding. Named once because the takeover repeats it on its own column, which
+   // is what puts OK on the mic's exact spot. See `composing` on the props above for the why.
+-  const blockPad = composing ? "pb-2" : "pb-[calc(env(safe-area-inset-bottom)_+_0.5rem)]";
++  const blockPad = composing ? "pb-2" : "pb-[max(var(--app-sab),0.5rem)]";
+   const blockRef = useRef<HTMLDivElement>(null);
+   const openedByKeyboard = useRef(false);
+   // When the takeover goes away, focus goes back to the round button at the end of the row (the mic,
+diff --git a/web/src/hooks/use-keyboard.test.ts b/web/src/hooks/use-keyboard.test.ts
+index 3e0cd78..d8b9435 100644
+--- a/web/src/hooks/use-keyboard.test.ts
++++ b/web/src/hooks/use-keyboard.test.ts
+@@ -1,6 +1,6 @@
+-import { describe, expect, it } from "vitest";
++import { describe, expect, it, vi } from "vitest";
+ 
+-import { keyboardLikelyOpen, nextKeyboardOpen } from "./use-keyboard";
++import { installViewportVars, keyboardLikelyOpen, nextKeyboardOpen } from "./use-keyboard";
+ 
+ describe("keyboardLikelyOpen", () => {
+   it("is closed when the height is unchanged", () => {
+@@ -56,3 +56,119 @@ describe("nextKeyboardOpen", () => {
+     expect(nextKeyboardOpen(true, baselineRaisedByUrlBar, 800)).toBe(false); // -80px
+   });
+ });
++
++type Viewport = { height: number; width: number; offsetTop: number };
++
++function withViewport(
++  test: (resize: (next: Partial<Viewport>) => void, clientHeight: (px: number) => void) => void,
++  { drawsKeyboardPill = false } = {},
++) {
++  const vv = Object.assign(new EventTarget(), { height: 800, width: 390, offsetTop: 0 });
++  const root = document.documentElement;
++  const height = vi.spyOn(root, "clientHeight", "get").mockReturnValue(800);
++  const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
++  vi.stubGlobal("visualViewport", vv);
++  vi.stubGlobal("CSS", { supports: () => drawsKeyboardPill });
++  vi.useFakeTimers();
++  try {
++    installViewportVars();
++    test(
++      (next) => {
++        Object.assign(vv, next);
++        vv.dispatchEvent(new Event("resize"));
++        vi.advanceTimersToNextFrame();
++      },
++      (px) => height.mockReturnValue(px),
++    );
++  } finally {
++    height.mockRestore();
++    hasFocus.mockRestore();
++    vi.unstubAllGlobals();
++    vi.useRealTimers();
++    root.style.removeProperty("--app-kb");
++    root.style.removeProperty("--app-sab");
++  }
++}
++
++const kb = () => document.documentElement.style.getPropertyValue("--app-kb");
++const sab = () => document.documentElement.style.getPropertyValue("--app-sab");
++
++it("shrinks the shell for the keyboard and restores it after close or rotation", () => {
++  withViewport((resize, clientHeight) => {
++    resize({ height: 480 });
++    expect(kb()).toBe("320px");
++    expect(sab()).toBe("0px");
++    resize({ height: 800 });
++    expect(kb()).toBe("");
++    expect(sab()).toBe("");
++    clientHeight(390);
++    resize({ width: 800, height: 390 });
++    expect(kb()).toBe("");
++  });
++});
++
++function withFocusedField(test: (field: HTMLTextAreaElement) => void) {
++  const field = document.createElement("textarea");
++  document.body.append(field);
++  try {
++    field.focus();
++    vi.advanceTimersToNextFrame();
++    test(field);
++  } finally {
++    field.remove();
++  }
++}
++
++it("sets aside the hardware keyboard's pill while a field has focus, since iOS never resizes for it", () => {
++  withViewport(
++    () => {
++      withFocusedField((field) => {
++        expect(kb()).toBe("59px");
++        expect(sab()).toBe("0px");
++        field.blur();
++        vi.advanceTimersToNextFrame();
++        expect(kb()).toBe("");
++        expect(sab()).toBe("");
++      });
++    },
++    { drawsKeyboardPill: true },
++  );
++});
++
++it("drops the pill when iOS takes text input from a field that keeps DOM focus", () => {
++  withViewport(
++    () => {
++      withFocusedField(() => {
++        vi.mocked(document.hasFocus).mockReturnValue(false);
++        window.dispatchEvent(new Event("blur"));
++        vi.advanceTimersToNextFrame();
++        expect(kb()).toBe("");
++        vi.mocked(document.hasFocus).mockReturnValue(true);
++        window.dispatchEvent(new Event("focus"));
++        vi.advanceTimersToNextFrame();
++        expect(kb()).toBe("59px");
++      });
++    },
++    { drawsKeyboardPill: true },
++  );
++});
++
++it("lets an on-screen keyboard taller than the pill win", () => {
++  withViewport(
++    (resize) => {
++      withFocusedField(() => {
++        resize({ height: 480 });
++        expect(kb()).toBe("320px");
++      });
++    },
++    { drawsKeyboardPill: true },
++  );
++});
++
++it("sets nothing aside for focus where no pill is drawn", () => {
++  withViewport(() => {
++    withFocusedField(() => {
++      expect(kb()).toBe("");
++    });
++  });
++});
+diff --git a/web/src/hooks/use-keyboard.ts b/web/src/hooks/use-keyboard.ts
+index aaa2fbe..0067909 100644
+--- a/web/src/hooks/use-keyboard.ts
++++ b/web/src/hooks/use-keyboard.ts
+@@ -65,6 +65,52 @@ export function nextKeyboardOpen(
+     : keyboardLikelyOpen(baselineHeight, currentHeight, KEYBOARD_MIN_PX);
+ }
+ 
++const KEYBOARD_PILL_PX = 59;
++
++export function installViewportVars(): void {
++  const vv = window.visualViewport;
++  if (!vv) return;
++  const root = document.documentElement;
++  const drawsKeyboardPill = CSS.supports("-webkit-touch-callout", "none");
++  let baseline = vv.height;
++  let baselineWidth = vv.width;
++  let frame = 0;
++  const shrink = (keyboard: number) => {
++    root.style.setProperty("--app-kb", `${keyboard}px`);
++    root.style.setProperty("--app-sab", "0px");
++  };
++  const write = () => {
++    frame = 0;
++    if (vv.width !== baselineWidth) {
++      baselineWidth = vv.width;
++      baseline = vv.height;
++    }
++    baseline = Math.max(baseline, vv.height);
++    const pill =
++      drawsKeyboardPill && document.hasFocus() && document.activeElement?.matches(":read-write")
++        ? KEYBOARD_PILL_PX
++        : 0;
++    if (keyboardLikelyOpen(baseline, vv.height)) {
++      shrink(Math.max(pill, root.clientHeight - vv.offsetTop - vv.height));
++    } else if (pill) {
++      shrink(pill);
++    } else {
++      root.style.removeProperty("--app-kb");
++      root.style.removeProperty("--app-sab");
++    }
++  };
++  const schedule = () => {
++    if (!frame) frame = requestAnimationFrame(write);
++  };
++  write();
++  vv.addEventListener("resize", schedule);
++  vv.addEventListener("scroll", schedule);
++  document.addEventListener("focusin", schedule);
++  document.addEventListener("focusout", schedule);
++  window.addEventListener("focus", schedule);
++  window.addEventListener("blur", schedule);
++}
++
+ export function useKeyboardOpen(): boolean {
+   const [open, setOpen] = useState(false);
+   useEffect(() => {
+diff --git a/web/src/hooks/use-polling.ts b/web/src/hooks/use-polling.ts
+index c2680c1..187ff9d 100644
+--- a/web/src/hooks/use-polling.ts
++++ b/web/src/hooks/use-polling.ts
+@@ -42,7 +42,7 @@ import type { Scope } from "@/lib/scope";
+ export const BURST_MS = 300;
+ /** The gap while the operator follows a pane that has something to show — its agent is working, or
+  *  its mirror moved on the last poll. */
+-export const HOT_MS = 1500;
++export const HOT_MS = 500;
+ /** The home screen while an agent somewhere is working or blocked. Nobody is on a mirror, so there
+  *  is nothing to keep smooth; the herd's row still has to reflect a status change without feeling
+  *  stuck. */
+diff --git a/web/src/index.css b/web/src/index.css
+index 9450d28..a4487aa 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -696,7 +696,7 @@
+   --color-host-9: var(--host-9);
+ 
+   --font-mono:
+-    "Nerd Font Symbols", "JetBrains Mono", "Cascadia Mono", "Cascadia Code",
++    "Nerd Font Symbols", "JetBrains Mono", "D2Coding", "Cascadia Mono", "Cascadia Code",
+     "Roboto Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+     "Liberation Mono", monospace;
+ 
+@@ -758,6 +758,24 @@
+   unicode-range: U+F0000-F1AFF;
+ }
+ 
++@font-face {
++  font-family: "D2Coding";
++  src: url("/fonts/d2coding-1.3.2-text.woff2") format("woff2");
++  font-display: swap;
++  unicode-range: U+0020-007E, U+00A0-00FF, U+0100-017F, U+0370-03FF, U+0400-04FF, U+2000-206F,
++    U+2070-209F, U+20A0-20BF, U+2100-214F, U+2190-21FF, U+2200-22FF, U+2300-23FF, U+2500-257F,
++    U+2580-259F, U+25A0-25FF, U+2600-26FF, U+2700-27BF;
++  size-adjust: 120%;
++}
++@font-face {
++  font-family: "D2Coding";
++  src: url("/fonts/d2coding-1.3.2-hangul.woff2") format("woff2");
++  font-display: swap;
++  unicode-range: U+3130-318F, U+AC00-D7A3;
++  size-adjust: 120%;
++}
++
++
+ /* The UI typefaces — Space Grotesk (the default) and Aldrich, both bundled. The app's own voice,
+  * and NOTHING ELSE'S.
+  *
+@@ -1132,13 +1150,6 @@
+   --app-h: 100dvh;
+   --app-h-ios-standalone: min(100lvh, calc(100dvh + env(safe-area-inset-top, 0px)));
+ }
+-@media (display-mode: standalone) {
+-  @supports (-webkit-touch-callout: none) {
+-    :root {
+-      --app-h: var(--app-h-ios-standalone);
+-    }
+-  }
+-}
+ 
+ @layer base {
+   * {
+@@ -1190,11 +1201,21 @@
+     min-height: 100%;
+     background-color: var(--background);
+     background-image: var(--ground-image);
++    --app-kb: 0px;
++    --app-sab: env(safe-area-inset-bottom);
++    overflow: hidden;
++  }
++  @keyframes app-focus-without-scroll {
++    from {
++      opacity: 0;
++    }
++  }
++  input:focus,
++  textarea:focus {
++    animation: app-focus-without-scroll 0.02s step-end;
+   }
+   body {
+-    /* No fill of its own: a body fill would cover the ground on html. The canvas under it is
+-       html's `--background`, the colour this rule used to paint. */
+-    @apply text-foreground;
++    @apply bg-chrome text-foreground;
+     /* Spelled here rather than left to Tailwind's `--default-font-family`, so the app's face is a
+        fact you can read in this file instead of a preflight default you have to know about. */
+     font-family: var(--font-sans);
+diff --git a/web/src/lib/sw-routes.ts b/web/src/lib/sw-routes.ts
+index 26bb7ff..fcf1eb4 100644
+--- a/web/src/lib/sw-routes.ts
++++ b/web/src/lib/sw-routes.ts
+@@ -133,6 +133,8 @@ export const UI_COMPANION_FONT_URLS = ["/fonts/ui-play-2.101-cyrillic.woff2"] as
+ export const FONT_URLS = [
+   "/fonts/nerd-symbols-3.5.0-pua.woff2",
+   "/fonts/nerd-symbols-3.5.0-spua.woff2",
++  "/fonts/d2coding-1.3.2-text.woff2",
++  "/fonts/d2coding-1.3.2-hangul.woff2",
+   ...UI_FONT_URLS,
+   ...UI_COMPANION_FONT_URLS,
+ ] as const;
+diff --git a/web/src/main.tsx b/web/src/main.tsx
+index 8c6e705..8d6e7ae 100644
+--- a/web/src/main.tsx
++++ b/web/src/main.tsx
+@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
+ 
+ import { App } from "./App";
+ import { onPreloadError } from "./lib/chunk-reload";
++import { installViewportVars } from "./hooks/use-keyboard";
+ import { initDesign } from "./lib/design";
+ import { initTheme } from "./lib/theme/store";
+ import { initOperatorFonts } from "./lib/operator-config";
+@@ -22,6 +23,7 @@ import { startPushTitleSync } from "./lib/push-titles";
+ // cases that script deliberately cannot — an operator-supplied face (no pre-paint path; it has no
+ // family name until /api/config answers) and Safari private mode, where the pre-paint read threw.
+ // Before createRoot, so the class is settled by the time anything measures a line box.
++installViewportVars();
+ initDesign();
+ // The colour theme, the same way: public/theme-init.js painted it from storage, and this settles what
+ // that script leaves out (the theme-color metas, a token an imported theme sets in one half only).
+diff --git a/web/src/routes/root.tsx b/web/src/routes/root.tsx
+index 6f91a01..d9fbaf2 100644
+--- a/web/src/routes/root.tsx
++++ b/web/src/routes/root.tsx
+@@ -153,7 +153,7 @@ export function RootLayout() {
+           inside it because it is not a strip: it covers the screen, it does not share the top of
+           it. */}
+       <TourHost home={data} onDecision={setTourDecision} />
+-      <div className="flex h-(--app-h) flex-col overflow-hidden">
++      <div className="fixed inset-x-0 top-0 flex h-[calc(var(--app-h)-var(--app-kb))] flex-col overflow-hidden bg-background">
+         {/* THE ONE HEADER, and the first thing on the screen in every state. It survives a
+             navigation because it is rendered HERE rather than inside `<Outlet/>`: all six routes used
+             to mount their own copy, and a header inside the outlet unmounts and remounts on every
+@@ -247,7 +247,7 @@ export function BootSplash() {
+   const stuck = useConnectionLost(true);
+   if (!stuck) {
+     return (
+-      <div className="flex h-(--app-h) flex-col items-center justify-center gap-3 text-muted-foreground">
++      <div className="flex h-(--app-h) flex-col items-center justify-center gap-3 bg-background text-muted-foreground">
+         {/* The bloom: the same mark as the rest state below, but turning and at full chroma. It is
+             a COLOUR as well as motion, which is the half a reduced-motion reader still gets —
+             `prefers-reduced-motion` stops the orbit and cannot stop the accents. `paper` is this
+@@ -260,7 +260,7 @@ export function BootSplash() {
+     );
+   }
+   return (
+-    <div className="flex h-(--app-h) flex-col items-center justify-center gap-3 p-6 text-center">
++    <div className="flex h-(--app-h) flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+       {/* Rest = the Collie mark still, muted (grayscale + dimmed) to read asleep
+           — never the gallop's own rest frame, whose full-stretch mid-stride pose looks frozen
+           mid-run. No `loading`: we have stopped trying, and a blooming mark would say otherwise.
+@@ -290,7 +290,7 @@ export function RootError() {
+   // language; anything else (a render-phase throw, a router error) keeps its own message.
+   const message = error instanceof Error ? describeThrownError(error) : t("error.root.unknown");
+   return (
+-    <div className="flex h-(--app-h) flex-col items-center justify-center gap-3 p-6 text-center">
++    <div className="flex h-(--app-h) flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+       <p className="font-medium text-destructive">{t("error.root.title")}</p>
+       <p className="max-w-xs text-sm text-muted-foreground">{message}</p>
+       <button

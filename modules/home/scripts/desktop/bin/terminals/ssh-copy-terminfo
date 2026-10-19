@@ -1,0 +1,7 @@
+#!/usr/bin/env fish
+if test -z $argv
+    echo "Usage: ssh-copy-terminfo username@hostname"
+    exit 1
+end
+
+infocmp -x | ssh $argv[1] -- tic -x -

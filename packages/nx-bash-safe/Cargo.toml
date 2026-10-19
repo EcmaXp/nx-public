@@ -1,0 +1,26 @@
+[package]
+name = "nx-bash-safe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.11.0"
+toml = "0.9"
+# Pinned exactly, and the pins are not interchangeable: py-tree-sitter 0.26.0
+# (what the python implementation used) vendors the C core at the v0.26.9 tag,
+# and tree-sitter-bash v0.25.1 ships the same generated parser.c to PyPI and
+# crates.io. Verified empirically: identical S-expressions and has_error over
+# all 29,645 distinct commands in the frozen corpus.
+tree-sitter = "=0.26.9"
+tree-sitter-bash = "=0.25.1"
+
+[profile.release]
+# The sibling hook crates use "z" because they are IO-bound; this one runs a
+# parser and a token walk on every Bash tool call, so it optimizes for speed.
+# panic stays "unwind": catch_unwind in main is how the hook never fails loudly.
+opt-level = 2
+lto = true
+codegen-units = 1
+strip = true

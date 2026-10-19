@@ -1,0 +1,28 @@
+[tools]
+# core
+"cockroach" = "latest"
+"pipx" = "latest"
+"terraform" = "latest"
+"vault" = "latest"
+# github
+"github:Ataraxy-Labs/sem" = "latest"
+"github:crabbuild/compass" = "latest"
+"github:ctxrs/ctx" = "latest"
+"github:datadog-labs/pup" = "latest"
+"github:lingrino/vaku" = "latest"
+"github:max-sixty/worktrunk" = "latest"
+"github:microsoft/tgrep" = "latest"
+"github:modem-dev/hunk" = "latest"
+"github:smarzban/tsk" = "latest"
+"github:wezm/git-grab" = "latest"
+# npm
+"npm:@earendil-works/pi-coding-agent" = { version = "1.0.0", minimum_release_age = "2026-10-02" }
+"npm:@toon-format/cli" = "latest"
+"npm:ccusage" = "latest"
+"npm:next" = "latest"
+# pipx
+"pipx:claude-swap" = "latest"
+"pipx:datasette" = "latest"
+"pipx:headroom-ai[all]" = "latest"
+"pipx:pz" = "latest"
+"pipx:reloader.py" = "latest"

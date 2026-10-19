@@ -1,0 +1,114 @@
+# Hand-maintained; the extract-policy.py generation contract retired 2026-08.
+# Third-party tools whose read surface is a subcommand path.
+
+version = 1
+
+# Read verbs, minus the ones that mint credentials, reveal a
+# secret, or write a local outfile. Tighter than the classifier
+# this mirrors, and deliberately so.
+[[command]]
+name = "aws"
+kind = "native"
+matcher = "aws"
+bool_flags = ["--debug", "--no-cli-pager", "--no-paginate", "--no-sign-request", "--no-verify-ssl"]
+deny = [
+  "get-authorization-token",
+  "get-clip",
+  "get-cluster-credentials",
+  "get-credentials-for-identity",
+  "get-federation-token",
+  "get-instance-access-details",
+  "get-job-output",
+  "get-login-password",
+  "get-media",
+  "get-object",
+  "get-object-torrent",
+  "get-open-id-token",
+  "get-open-id-token-for-developer-identity",
+  "get-parameter",
+  "get-parameter-history",
+  "get-parameters",
+  "get-parameters-by-path",
+  "get-password-data",
+  "get-relational-database-master-user-password",
+  "get-role-credentials",
+  "get-secret-value",
+  "get-session-token",
+  "get-token",
+  "select-object-content",
+]
+
+# `fmt` rewrites files in place, so it is suppressed under plan
+# mode rather than refused outright.
+[[command]]
+name = "terraform"
+kind = "paths"
+paths = ["fmt", "graph", "output", "plan", "providers", "show", "validate", "version"]
+skip_flags = true
+matchers = ["terraform_init_backend_false"]
+
+[[command]]
+name = "kubectl"
+kind = "paths"
+skip_flags = true
+skip_value_flags = ["--context", "--namespace", "-n", "--kubeconfig", "--cluster", "--user"]
+paths = ["api-resources", "api-versions", "cluster-info", "describe", "explain", "get", "logs", "top", "version", "config current-context", "config get-clusters", "config get-contexts", "config get-users", "config view"]
+
+[[command]]
+name = "mise"
+kind = "paths"
+paths = ["current", "doctor", "env", "list", "ls", "where", "which"]
+
+# `status` is a single word; everything else is a pair.
+[[command]]
+name = "herdr"
+kind = "paths"
+paths = ["status", "agent get", "agent list", "agent read", "api schema", "notification list", "pane list", "pane read", "tab list", "workspace list"]
+
+# Pair tables: the subcommand decides which flags are readable.
+[[command]]
+name = "docker"
+kind = "path_flags"
+
+[command.tables]
+"ps" = "-a --all -q --quiet --format:a --filter:a -f:a -n:a --last:a -l --latest -s --size --no-trunc"
+"images" = "-a --all -q --quiet --digests --format:a --filter:a -f:a --no-trunc"
+"logs" = "--follow -f --tail:a -n:a --timestamps -t --since:a --until:a --details"
+"inspect" = "--format:a -f:a --type:a --size -s"
+
+# Flag-gated rather than pair-matched, because a read subcommand
+# can carry a side effect: `status --web` starts a webserver and
+# opens a browser, `netcheck --every` loops forever. Go flags mean
+# single-dash long forms have to be in the table too.
+[[command]]
+name = "tailscale"
+kind = "path_flags"
+help_anywhere = true
+
+[command.tables]
+"appc-routes" = "--all --map --n"
+"ip" = "--1 --4 --6 -1 -4 -6"
+"licenses" = ""
+"netcheck" = "--format:a --verbose"
+"ping" = "--c:a --icmp --peerapi --size:a --timeout:a --tsmp --until-direct --verbose"
+"status" = "--active --header --json --peers --self"
+"version" = "--daemon --json --upstream"
+"whois" = "--json --proto:a"
+"dns query" = ""
+"dns status" = "--all --json"
+"exit-node list" = "--filter:a"
+"exit-node suggest" = ""
+"lock log" = "--limit:a --json"
+"lock status" = "--json"
+"metrics print" = ""
+"syspolicy list" = "--json"
+
+# `--tf-path` names the binary to exec, so this needs a table and
+# not a pair match.
+[[command]]
+name = "terragrunt"
+kind = "path_flags"
+
+[command.tables]
+"dag graph" = "--all --inputs --json --no-filters-file --queue-ignore-dag-order --queue-ignore-errors --show-config-path --strict --strict-mode --no-color --no-tips --non-interactive --log-disable --log-format:a --log-level:a --log-show-abs-paths --working-dir:a"
+"hcl validate" = "--all --inputs --json --no-filters-file --queue-ignore-dag-order --queue-ignore-errors --show-config-path --strict --strict-mode --no-color --no-tips --non-interactive --log-disable --log-format:a --log-level:a --log-show-abs-paths --working-dir:a"

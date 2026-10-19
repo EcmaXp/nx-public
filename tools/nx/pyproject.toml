@@ -1,0 +1,20 @@
+[project]
+name = "nx"
+version = "1"
+description = "EcmaXp's nx shared library"
+authors = [{ name = "EcmaXp" }]
+requires-python = ">= 3.14"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/EcmaXp/nx-public"
+
+[tool.hatch.build]
+dev-mode-dirs = ["."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["nx"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

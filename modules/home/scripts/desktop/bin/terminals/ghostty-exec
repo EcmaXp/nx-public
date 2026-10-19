@@ -1,0 +1,26 @@
+#!/run/current-system/sw/bin/fish
+if test (count $argv) -ne 2
+    echo "Usage: ghostty-exec <title> <command>"
+    exit 1
+end
+
+set title $argv[1]
+set command $argv[2]
+
+set window_id (aerospace list-windows --focused --format "%{window-id} %{app-bundle-id} %{window-title}" | grep com.mitchellh.ghostty | grep $title | awk '{print $1}' | head -n 1)
+if test -n "$window_id"
+    exec osascript -e 'tell application "System Events" to keystroke "h" using {command down}'
+end
+
+set window_id (aerospace list-windows --app-bundle-id com.mitchellh.ghostty --monitor all --format "%{window-id} %{window-title}" | grep $title | awk '{print $1}' | head -n 1)
+if test -n "$window_id"
+    exec aerospace focus --window-id "$window_id"
+end
+
+exec open -a ghostty --new --args \
+    --title=$title \
+    --wait-after-command=false \
+    --quit-after-last-window-closed=true \
+    --keybind=super+n=ignore \
+    --keybind=super+t=ignore \
+    -e $SHELL -c $(string escape -- $command)

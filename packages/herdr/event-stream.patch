@@ -1,0 +1,527 @@
+diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
+index e2553f75..14181a69 100644
+--- a/docs/next/api/herdr-api.schema.json
++++ b/docs/next/api/herdr-api.schema.json
+@@ -4227,7 +4227,10 @@
+                   ]
+                 },
+                 "pane_id": {
+-                  "type": "string"
++                  "type": [
++                    "string",
++                    "null"
++                  ]
+                 },
+                 "type": {
+                   "const": "pane.agent_status_changed",
+@@ -4235,8 +4238,7 @@
+                 }
+               },
+               "required": [
+-                "type",
+-                "pane_id"
++                "type"
+               ],
+               "type": "object"
+             },
+diff --git a/src/api/event_hub.rs b/src/api/event_hub.rs
+index 29843313..19a6dc52 100644
+--- a/src/api/event_hub.rs
++++ b/src/api/event_hub.rs
+@@ -1,6 +1,15 @@
++use std::sync::{Arc, Condvar, Mutex};
++use std::time::Duration;
++
+ #[derive(Clone, Default)]
+ pub struct EventHub {
+-    inner: std::sync::Arc<std::sync::Mutex<EventHubState>>,
++    inner: Arc<EventHubInner>,
++}
++
++#[derive(Default)]
++struct EventHubInner {
++    state: Mutex<EventHubState>,
++    changed: Condvar,
+ }
+ 
+ #[derive(Default)]
+@@ -19,7 +28,7 @@ impl EventHub {
+     const MAX_EVENTS: usize = 512;
+ 
+     pub fn push(&self, event: crate::api::schema::EventEnvelope) {
+-        let Ok(mut state) = self.inner.lock() else {
++        let Ok(mut state) = self.inner.state.lock() else {
+             return;
+         };
+         state.next_sequence += 1;
+@@ -29,10 +38,12 @@ impl EventHub {
+         if overflow > 0 {
+             state.events.drain(0..overflow);
+         }
++        drop(state);
++        self.inner.changed.notify_all();
+     }
+ 
+     pub fn events_after(&self, sequence: u64) -> Vec<(u64, crate::api::schema::EventEnvelope)> {
+-        let Ok(state) = self.inner.lock() else {
++        let Ok(state) = self.inner.state.lock() else {
+             return Vec::new();
+         };
+         state
+@@ -49,6 +60,7 @@ impl EventHub {
+     ) -> Result<Vec<(u64, crate::api::schema::EventEnvelope)>, EventHistoryError> {
+         let state = self
+             .inner
++            .state
+             .lock()
+             .map_err(|_| EventHistoryError::Unavailable)?;
+         if state
+@@ -67,15 +79,35 @@ impl EventHub {
+     }
+ 
+     pub fn current_sequence(&self) -> u64 {
+-        let Ok(state) = self.inner.lock() else {
++        let Ok(state) = self.inner.state.lock() else {
+             return 0;
+         };
+         state.next_sequence
+     }
++
++    pub fn wait_for_change(&self, sequence: u64, timeout: Duration) -> u64 {
++        let Ok(state) = self.inner.state.lock() else {
++            return sequence;
++        };
++        if state.next_sequence > sequence {
++            return state.next_sequence;
++        }
++
++        let Ok((state, _)) = self
++            .inner
++            .changed
++            .wait_timeout_while(state, timeout, |state| state.next_sequence <= sequence)
++        else {
++            return sequence;
++        };
++        state.next_sequence
++    }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
++    use std::time::{Duration, Instant};
++
+     use super::*;
+     use crate::api::schema::{EventData, EventEnvelope, EventKind};
+ 
+@@ -115,7 +147,7 @@ mod tests {
+     fn checked_history_reports_unavailable_instead_of_empty_after_poison() {
+         let hub = EventHub::default();
+         assert!(std::panic::catch_unwind(|| {
+-            let _guard = hub.inner.lock().unwrap();
++            let _guard = hub.inner.state.lock().unwrap();
+             panic!("poison the test event history");
+         })
+         .is_err());
+@@ -124,4 +156,31 @@ mod tests {
+             Err(EventHistoryError::Unavailable)
+         );
+     }
++
++    #[test]
++    fn push_wakes_waiter_immediately() {
++        let hub = EventHub::default();
++        let waiting_hub = hub.clone();
++        let waiter = std::thread::spawn(move || {
++            let started = Instant::now();
++            let sequence = waiting_hub.wait_for_change(0, Duration::from_secs(1));
++            (sequence, started.elapsed())
++        });
++
++        std::thread::sleep(Duration::from_millis(10));
++        hub.push(event());
++        let (sequence, elapsed) = waiter.join().unwrap();
++
++        assert_eq!(sequence, 1);
++        assert!(elapsed < Duration::from_millis(100));
++    }
++
++    #[test]
++    fn wait_times_out_without_an_event() {
++        let hub = EventHub::default();
++        let started = Instant::now();
++
++        assert_eq!(hub.wait_for_change(0, Duration::from_millis(10)), 0);
++        assert!(started.elapsed() >= Duration::from_millis(5));
++    }
+ }
+diff --git a/src/api/schema/events.rs b/src/api/schema/events.rs
+index 52ac6c96..0889b8c9 100644
+--- a/src/api/schema/events.rs
++++ b/src/api/schema/events.rs
+@@ -74,7 +74,8 @@ pub enum Subscription {
+     },
+     #[serde(rename = "pane.agent_status_changed")]
+     PaneAgentStatusChanged {
+-        pane_id: String,
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        pane_id: Option<String>,
+         #[serde(default, skip_serializing_if = "Option::is_none")]
+         agent_status: Option<AgentStatus>,
+     },
+diff --git a/src/api/schema/tests.rs b/src/api/schema/tests.rs
+index 3b43133b..81775a25 100644
+--- a/src/api/schema/tests.rs
++++ b/src/api/schema/tests.rs
+@@ -650,7 +650,7 @@ fn subscribe_request_parses_parameterized_subscriptions() {
+     assert!(matches!(
+         &params.subscriptions[1],
+         Subscription::PaneAgentStatusChanged {
+-            pane_id,
++            pane_id: Some(pane_id),
+             agent_status: Some(AgentStatus::Done),
+         } if pane_id == "p_1_1"
+     ));
+diff --git a/src/api/server.rs b/src/api/server.rs
+index 0a4cfa66..b3f7e25a 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -30,6 +30,7 @@ const SOCKET_PERMISSION_MODE: u32 = 0o600;
+ pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+ pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+ const INITIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
++const INITIAL_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(1);
+ const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+ const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
+ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
+@@ -773,7 +774,7 @@ fn read_initial_request_line_with_limits(
+                         "timed out reading api request",
+                     ));
+                 }
+-                std::thread::sleep(CONNECTION_POLL_INTERVAL);
++                std::thread::sleep(INITIAL_REQUEST_POLL_INTERVAL);
+             }
+         }
+     };
+@@ -963,6 +964,8 @@ fn stream_subscriptions(
+             return Ok(());
+         }
+ 
++        let observed_sequence = event_hub.current_sequence();
++        let mut emitted = false;
+         for subscription in &mut subscriptions {
+             let events = match subscription.poll_batch(api_tx, event_hub) {
+                 Ok(events) => events,
+@@ -977,6 +980,7 @@ fn stream_subscriptions(
+                     return Ok(());
+                 }
+             };
++            emitted |= !events.is_empty();
+             for event in events {
+                 if should_stop_connection(&mut stream, running)? {
+                     return Ok(());
+@@ -989,7 +993,11 @@ fn stream_subscriptions(
+                 }
+             }
+         }
+-        std::thread::sleep(CONNECTION_POLL_INTERVAL);
++        if emitted {
++            continue;
++        }
++
++        event_hub.wait_for_change(observed_sequence, CONNECTION_POLL_INTERVAL);
+     }
+ }
+ 
+@@ -1919,6 +1927,59 @@ mod tests {
+         server_thread.join().unwrap();
+     }
+ 
++    #[test]
++    fn subscriptions_skip_history_and_wake_on_new_events() {
++        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
++        let (mut client, server, _path) = local_stream_pair("api-sub-wake");
++        client
++            .write_all(
++                br#"{"id":"sub_wake","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed"}]}}"#,
++            )
++            .unwrap();
++        client.write_all(b"\n").unwrap();
++        client.flush().unwrap();
++
++        let event_hub = EventHub::default();
++        let status_event = |title: &str| crate::api::schema::EventEnvelope {
++            event: crate::api::schema::EventKind::PaneAgentStatusChanged,
++            data: crate::api::schema::EventData::PaneAgentStatusChanged {
++                pane_id: "pane_1".into(),
++                workspace_id: "ws_1".into(),
++                agent_status: crate::api::schema::AgentStatus::Working,
++                agent: Some("pi".into()),
++                title: Some(title.into()),
++                display_agent: None,
++                state_labels: HashMap::new(),
++            },
++        };
++        event_hub.push(status_event("historical"));
++
++        let running = Arc::new(AtomicBool::new(true));
++        let server_running = Arc::clone(&running);
++        let server_event_hub = event_hub.clone();
++        let (done_tx, done_rx) = std::sync::mpsc::channel();
++        let server_thread = std::thread::spawn(move || {
++            let result =
++                handle_connection(server, &api_tx, &server_event_hub, &server_running, None);
++            done_tx.send(result).unwrap();
++        });
++
++        let ack: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
++        assert_eq!(ack["result"]["type"], "subscription_started");
++
++        let started = Instant::now();
++        event_hub.push(status_event("future"));
++        let event: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
++
++        assert_eq!(event["data"]["title"], "future");
++        assert!(started.elapsed() < Duration::from_millis(50));
++
++        drop(client);
++        let result = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
++        assert!(result.is_ok());
++        server_thread.join().unwrap();
++    }
++
+     #[test]
+     fn subscriptions_stop_when_server_shuts_down() {
+         let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+diff --git a/src/api/subscriptions.rs b/src/api/subscriptions.rs
+index 2258a3ce..f3299cfd 100644
+--- a/src/api/subscriptions.rs
++++ b/src/api/subscriptions.rs
+@@ -97,8 +97,14 @@ pub(super) struct ActiveEventSubscription {
+     last_sequence: u64,
+ }
+ 
++pub(super) struct ActiveAgentStatusEventsSubscription {
++    status_filter: Option<crate::api::schema::AgentStatus>,
++    last_sequence: u64,
++}
++
+ pub(super) enum ActiveSubscription {
+     Event(ActiveEventSubscription),
++    AgentStatusEvents(ActiveAgentStatusEventsSubscription),
+     OutputMatched(ActiveOutputMatchedSubscription),
+     AgentStatusChanged(Box<ActiveAgentStatusChangedSubscription>),
+     ScrollChanged(ActiveScrollChangedSubscription),
+@@ -207,6 +213,14 @@ impl ActiveSubscription {
+                 pane_id,
+                 agent_status,
+             } => {
++                let Some(pane_id) = pane_id else {
++                    return Ok(Self::AgentStatusEvents(
++                        ActiveAgentStatusEventsSubscription {
++                            status_filter: agent_status,
++                            last_sequence: event_start_sequence,
++                        },
++                    ));
++                };
+                 let last_sequence = event_hub.current_sequence();
+                 let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
+                 let last_status = probe.agent_status;
+@@ -254,6 +268,7 @@ impl ActiveSubscription {
+     ) -> Option<serde_json::Value> {
+         match self {
+             Self::Event(subscription) => subscription.poll(event_hub),
++            Self::AgentStatusEvents(subscription) => subscription.poll(event_hub),
+             Self::OutputMatched(subscription) => {
+                 serde_json::to_value(subscription.poll(api_tx)?).ok()
+             }
+@@ -314,6 +329,17 @@ impl ActiveSubscription {
+                 }
+                 Ok(matching)
+             }
++            Self::AgentStatusEvents(subscription) => {
++                let events = subscription_events_after(event_hub, subscription.last_sequence)?;
++                let mut matching = Vec::new();
++                for (sequence, event) in events {
++                    subscription.last_sequence = sequence;
++                    if subscription.matches(&event) {
++                        matching.push(serde_json::to_value(event).map_err(event_encoding_error)?);
++                    }
++                }
++                Ok(matching)
++            }
+             // These subscriptions sample current state, not retained event history.
+             // Keep their existing cadence even when a lifecycle batch was nonempty.
+             Self::OutputMatched(_) | Self::ScrollChanged(_) => {
+@@ -358,6 +384,29 @@ impl ActiveEventSubscription {
+     }
+ }
+ 
++impl ActiveAgentStatusEventsSubscription {
++    fn matches(&self, event: &crate::api::schema::EventEnvelope) -> bool {
++        let crate::api::schema::EventData::PaneAgentStatusChanged { agent_status, .. } = &event.data
++        else {
++            return false;
++        };
++        event.event == crate::api::schema::EventKind::PaneAgentStatusChanged
++            && self
++                .status_filter
++                .is_none_or(|wanted| wanted == *agent_status)
++    }
++
++    fn poll(&mut self, event_hub: &EventHub) -> Option<serde_json::Value> {
++        for (sequence, event) in event_hub.events_after(self.last_sequence) {
++            self.last_sequence = sequence;
++            if self.matches(&event) {
++                return serde_json::to_value(event).ok();
++            }
++        }
++        None
++    }
++}
++
+ impl ActiveOutputMatchedSubscription {
+     fn poll(&mut self, api_tx: &ApiRequestSender) -> Option<SubscriptionEventEnvelope> {
+         let read = pane_read(
+@@ -859,6 +908,51 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn event_subscription_starts_at_the_requested_sequence() {
++        let event_hub = EventHub::default();
++        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
++        event_hub.push(presentation_event(None));
++        let boundary = event_hub.current_sequence();
++        let mut subscription = ActiveSubscription::new(
++            Subscription::WorkspaceMetadataUpdated {},
++            "test",
++            0,
++            &api_tx,
++            &event_hub,
++            boundary,
++        )
++        .expect("workspace metadata subscription");
++
++        assert!(subscription.poll(&api_tx, &event_hub).is_none());
++    }
++
++    #[test]
++    fn global_agent_status_subscription_receives_future_events() {
++        let event_hub = EventHub::default();
++        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
++        let mut subscription = ActiveSubscription::new(
++            Subscription::PaneAgentStatusChanged {
++                pane_id: None,
++                agent_status: Some(AgentStatus::Working),
++            },
++            "test",
++            0,
++            &api_tx,
++            &event_hub,
++            event_hub.current_sequence(),
++        )
++        .expect("global agent status subscription");
++        event_hub.push(presentation_event(Some("working")));
++
++        event_hub.push(workspace_focused_event("unrelated"));
++
++        let events = subscription.poll_batch(&api_tx, &event_hub).unwrap();
++        assert_eq!(events.len(), 1);
++        assert_eq!(events[0]["event"], "pane_agent_status_changed");
++        assert_eq!(events[0]["data"]["pane_id"], "pane_1");
++    }
++
+     #[test]
+     fn scroll_subscription_emits_when_scroll_snapshot_changes() {
+         let at_bottom = PaneScrollInfo {
+diff --git a/src/api/wait.rs b/src/api/wait.rs
+index 541779f8..f15e98e8 100644
+--- a/src/api/wait.rs
++++ b/src/api/wait.rs
+@@ -765,7 +765,7 @@ fn event_match_subscription(
+             pane_id,
+             agent_status,
+         } => Ok(Subscription::PaneAgentStatusChanged {
+-            pane_id,
++            pane_id: Some(pane_id),
+             agent_status: Some(agent_status),
+         }),
+         _ => Err(ErrorResponse {
+diff --git a/src/app/actions.rs b/src/app/actions.rs
+index ed131dcd..3aafcf08 100644
+--- a/src/app/actions.rs
++++ b/src/app/actions.rs
+@@ -178,6 +178,7 @@ pub struct PaneStateUpdate {
+     pub seen: bool,
+     pub presentation: crate::terminal::EffectivePresentation,
+     pub agent_name_changed: bool,
++    pub session_ref_changed: bool,
+     pub agent_released: bool,
+     pub agent_release_status: Option<crate::api::schema::AgentStatus>,
+     pub suppress_completion: bool,
+@@ -321,6 +322,7 @@ impl AppState {
+                     seen,
+                     presentation: change.presentation.clone(),
+                     agent_name_changed: false,
++                    session_ref_changed: false,
+                     agent_released: false,
+                     agent_release_status: None,
+                     suppress_completion: false,
+@@ -1730,6 +1732,7 @@ impl AppState {
+             let agent_name_changed = terminal.agent_name != previous_agent_name;
+             let unchanged_change = (mutation.agent_released
+                 || agent_name_changed
++                || mutation.session_ref_changed
+                 || (completion_reset && had_completion))
+                 .then(|| terminal.unchanged_effective_state_change_at(now));
+             (
+@@ -1745,7 +1748,8 @@ impl AppState {
+             self.pending_agent_notifications.remove(&pane_id);
+             self.workspaces[ws_idx].pane_state_mut(pane_id)?.seen = true;
+         }
+-        if mutation.session_ref_changed || managed_changed || agent_name_changed {
++        let session_ref_changed = mutation.session_ref_changed;
++        if session_ref_changed || managed_changed || agent_name_changed {
+             self.mark_session_dirty();
+         }
+         let agent_released = mutation.agent_released;
+@@ -1784,6 +1788,7 @@ impl AppState {
+             seen,
+             presentation: change.presentation.clone(),
+             agent_name_changed,
++            session_ref_changed,
+             agent_released,
+             agent_release_status: agent_released.then(|| pane_agent_status(change.state, seen)),
+             suppress_completion,
+@@ -4127,7 +4132,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn hidden_custom_session_ref_only_update_marks_session_dirty_without_visible_update() {
++    fn custom_session_ref_only_update_returns_visible_update() {
+         let mut state = app_with_workspaces(&["active"]);
+         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+         let test_dir = std::env::current_dir().unwrap();
+@@ -4156,7 +4161,8 @@ mod tests {
+             session_ref: crate::agent_resume::AgentSessionRef::path(second_session),
+         });
+ 
+-        assert!(second_updates.is_empty());
++        assert_eq!(second_updates.len(), 1);
++        assert!(second_updates[0].session_ref_changed);
+         assert!(state.session_dirty);
+     }
+ 
+diff --git a/src/app/api.rs b/src/app/api.rs
+index dd87c508..8809ac61 100644
+--- a/src/app/api.rs
++++ b/src/app/api.rs
+@@ -692,7 +692,7 @@ impl App {
+         };
+         let workspace_id = self.public_workspace_id(update.ws_idx);
+ 
+-        if update.agent_name_changed {
++        if update.agent_name_changed || update.session_ref_changed {
+             self.emit_pane_updated(update.ws_idx, update.pane_id);
+         }
+ 

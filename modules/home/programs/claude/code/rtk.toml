@@ -1,0 +1,11 @@
+[hooks]
+exclude_commands = [
+  "diff",
+  "git diff",
+  "git show",
+  "grep",
+  "rg",
+]
+
+[telemetry]
+enabled = false

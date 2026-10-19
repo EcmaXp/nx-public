@@ -1,0 +1,28 @@
+# Tasks board and quick capture inside herdr. Explicit actions only.
+
+id = "herdr-tsk"
+name = "herdr-tsk"
+version = "0.10.1"
+description = "Queue board and quick capture inside herdr."
+min_herdr_version = "0.7.5"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "tsk"
+placement = "split"
+command = ["@tsk@"]
+
+[[actions]]
+id = "open-board"
+platforms = ["linux", "macos"]
+title = "Open tsk board"
+description = "Open the tsk board in a split pane beside the current work."
+command = ["bash", "scripts/open-board.sh"]
+
+[[actions]]
+id = "quick-capture"
+platforms = ["linux", "macos"]
+title = "Quick capture"
+description = "Capture a new task with context without first opening the board."
+command = ["bash", "scripts/open-capture.sh"]

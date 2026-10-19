@@ -1,0 +1,35 @@
+# Hand-maintained; the extract-policy.py generation contract retired 2026-08.
+# gh. Every table already carries --jq/-q, which is output shaping.
+# `gh api` is not a table: it is GET-only and refuses field flags, so it
+# has a compiled matcher.
+
+version = 1
+
+[[command]]
+name = "gh"
+kind = "native"
+matcher = "gh"
+
+[command.tables]
+"pr view" = "--json:a --comments --repo:a -R:a --jq:a -q:a"
+"pr list" = "--state:a -s:a --author:a --assignee:a --label:a --limit:a -L:a --base:a --head:a --search:a --json:a --draft --app:a --repo:a -R:a --jq:a -q:a"
+"pr diff" = "--color:a --name-only --patch --repo:a -R:a --jq:a -q:a"
+"pr checks" = "--watch --required --fail-fast --json:a --interval:a --repo:a -R:a --jq:a -q:a"
+"pr status" = "--conflict-status -c --json:a --repo:a -R:a --jq:a -q:a"
+"issue view" = "--json:a --comments --repo:a -R:a --jq:a -q:a"
+"issue list" = "--state:a -s:a --assignee:a --author:a --label:a --limit:a -L:a --milestone:a --search:a --json:a --app:a --repo:a -R:a --jq:a -q:a"
+"issue status" = "--json:a --repo:a -R:a --jq:a -q:a"
+"repo view" = "--json:a --jq:a -q:a"
+"run list" = "--branch:a -b:a --status:a -s:a --workflow:a -w:a --limit:a -L:a --json:a --repo:a -R:a --event:a -e:a --user:a -u:a --created:a --commit:a -c:a --jq:a -q:a"
+"run view" = "--log --log-failed --exit-status --verbose -v --json:a --repo:a -R:a --job:a -j:a --attempt:a -a:a --jq:a -q:a"
+"auth status" = "--active -a --hostname:a -h:a --json:a --jq:a -q:a"
+"release list" = "--exclude-drafts --exclude-pre-releases --json:a --limit:a -L:a --order:a -O:a --repo:a -R:a --jq:a -q:a"
+"release view" = "--json:a --repo:a -R:a --jq:a -q:a"
+"workflow list" = "--all -a --json:a --limit:a -L:a --repo:a -R:a --jq:a -q:a"
+"workflow view" = "--ref:a -r:a --yaml -y --repo:a -R:a --jq:a -q:a"
+"label list" = "--json:a --limit:a -L:a --order:a --search:a -S:a --sort:a --repo:a -R:a --jq:a -q:a"
+"search repos" = "--archived --created:a --followers:a --forks:a --good-first-issues:a --help-wanted-issues:a --include-forks:a --json:a --language:a --license:a --limit:a -L:a --match:a --number-topics:a --order:a --owner:a --size:a --sort:a --stars:a --topic:a --updated:a --visibility:a --jq:a -q:a"
+"search issues" = "--app:a --assignee:a --author:a --closed:a --commenter:a --comments:a --created:a --include-prs --interactions:a --involves:a --json:a --label:a --language:a --limit:a -L:a --locked --match:a --mentions:a --milestone:a --no-assignee --no-label --no-milestone --no-project --order:a --owner:a --project:a --reactions:a --repo:a -R:a --sort:a --state:a --team-mentions:a --updated:a --visibility:a --jq:a -q:a"
+"search prs" = "--app:a --assignee:a --author:a --base:a -B:a --checks:a --closed:a --commenter:a --comments:a --created:a --draft --head:a -H:a --interactions:a --involves:a --json:a --label:a --language:a --limit:a -L:a --locked --match:a --mentions:a --merged --merged-at:a --milestone:a --no-assignee --no-label --no-milestone --no-project --order:a --owner:a --project:a --reactions:a --repo:a -R:a --review:a --review-requested:a --reviewed-by:a --sort:a --state:a --team-mentions:a --updated:a --visibility:a --jq:a -q:a"
+"search commits" = "--author:a --author-date:a --author-email:a --author-name:a --committer:a --committer-date:a --committer-email:a --committer-name:a --hash:a --json:a --limit:a -L:a --merge --order:a --owner:a --parent:a --repo:a -R:a --sort:a --tree:a --visibility:a --jq:a -q:a"
+"search code" = "--extension:a --filename:a --json:a --language:a --limit:a -L:a --match:a --owner:a --repo:a -R:a --size:a --jq:a -q:a"

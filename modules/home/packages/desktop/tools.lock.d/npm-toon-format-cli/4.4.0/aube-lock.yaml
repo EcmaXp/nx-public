@@ -1,0 +1,24 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@toon-format/cli':
+        specifier: 4.4.0
+        version: 4.4.0
+
+packages:
+
+  '@toon-format/cli@4.4.0':
+    resolution: {integrity: sha512-FMyHNH+RZi8as6IXDDWWGpDef+cAyhf91eCNxeFUrcLvmkAizkqdsaj6TsFIk3HQzbQfqSXF/ceXJW70D+Umiw==}
+    engines: {node: '>=24'}
+    hasBin: true
+
+snapshots:
+
+  '@toon-format/cli@4.4.0': {}
