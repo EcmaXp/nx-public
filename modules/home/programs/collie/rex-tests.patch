@@ -1,0 +1,2291 @@
+diff --git a/bridge/journal/claude-pid.test.ts b/bridge/journal/claude-pid.test.ts
+new file mode 100644
+index 00000000..aad4da3d
+--- /dev/null
++++ b/bridge/journal/claude-pid.test.ts
+@@ -0,0 +1,126 @@
++import { describe, expect, test } from "bun:test";
++
++import {
++  ClaudePidSessions,
++  claudePidRecordDirs,
++  normalizeProcessStart,
++  parseClaudePidRecord,
++  processStartUtc,
++  type ProcessStartOf,
++  type ReadText,
++} from "./claude-pid.ts";
++
++const SESSION = "4af98971-ee53-48f4-a493-cf8611b64b8b";
++const OTHER = "ca7d7e1b-a296-4a73-a098-b41a249c1bbf";
++const START = "Sat Oct 31 08:19:56 2026";
++
++function recordText(fields: Record<string, string | number>): string {
++  return JSON.stringify({ pid: 64356, sessionId: SESSION, procStart: START, kind: "interactive", ...fields });
++}
++
++function files(entries: Record<string, string> | ReadonlyMap<string, string>): ReadText {
++  const map = entries instanceof Map ? entries : new Map(Object.entries(entries));
++  return (path) => Promise.resolve(map.get(path) ?? null);
++}
++
++interface CountingStart {
++  readonly startOf: ProcessStartOf;
++  readonly asked: number[];
++}
++
++function counting(start: string | null): CountingStart {
++  const asked: number[] = [];
++  return {
++    asked,
++    startOf: (pid) => {
++      asked.push(pid);
++      return Promise.resolve(start);
++    },
++  };
++}
++
++describe("claudePidRecordDirs", () => {
++  test("each Claude projects root has its pid records beside it, once", () => {
++    expect(claudePidRecordDirs(["/h/.claude/projects", " /h/.claude-work/projects ", "", "/h/.claude/projects"], "/h")).toEqual([
++      "/h/.claude/sessions",
++      "/h/.claude-work/sessions",
++    ]);
++    expect(claudePidRecordDirs([""], "/h")).toEqual([]);
++  });
++
++  test("a root not named projects reads the home config dir, as Claude commands do", () => {
++    expect(claudePidRecordDirs(["/x/claude-logs"], "/h")).toEqual(["/h/.claude/sessions"]);
++  });
++});
++
++describe("parseClaudePidRecord", () => {
++  test("a record of this pid names its session and its process start", () => {
++    expect(parseClaudePidRecord(recordText({}), 64356)).toEqual({ sessionId: SESSION, procStart: START });
++  });
++
++  test("a record of another pid, a malformed id, or no start time names nothing", () => {
++    expect(parseClaudePidRecord(recordText({}), 64357)).toBeNull();
++    expect(parseClaudePidRecord(recordText({ sessionId: "../../etc/passwd" }), 64356)).toBeNull();
++    expect(parseClaudePidRecord(recordText({ procStart: " " }), 64356)).toBeNull();
++    expect(parseClaudePidRecord("not json", 64356)).toBeNull();
++  });
++
++  test("process start text compares with its spacing collapsed", () => {
++    expect(normalizeProcessStart("Sat Oct  3 08:19:56 2026    \n")).toBe("Sat Oct 3 08:19:56 2026");
++  });
++});
++
++describe("ClaudePidSessions", () => {
++  const dir = "/h/.claude/sessions";
++
++  test("a record whose process started when it says names the session", async () => {
++    const { startOf } = counting(START);
++    const sessions = new ClaudePidSessions([dir], startOf, files({ [`${dir}/64356.json`]: recordText({}) }));
++    expect(await sessions.sessionFor(64356)).toEqual({ kind: "id", value: SESSION });
++  });
++
++  test("a record left by an earlier process with the same pid names nothing", async () => {
++    const { startOf } = counting("Sat Oct 31 09:00:00 2026");
++    const sessions = new ClaudePidSessions([dir], startOf, files({ [`${dir}/64356.json`]: recordText({}) }));
++    expect(await sessions.sessionFor(64356)).toBeNull();
++  });
++
++  test("a process whose start cannot be read names nothing", async () => {
++    const { startOf } = counting(null);
++    const sessions = new ClaudePidSessions([dir], startOf, files({ [`${dir}/64356.json`]: recordText({}) }));
++    expect(await sessions.sessionFor(64356)).toBeNull();
++  });
++
++  test("a later config dir answers when the first holds no valid record for the pid", async () => {
++    const second = "/h/.claude-work/sessions";
++    const { startOf } = counting(START);
++    const read = files({ [`${dir}/64356.json`]: recordText({ pid: 1 }), [`${second}/64356.json`]: recordText({ sessionId: OTHER }) });
++    expect(await new ClaudePidSessions([dir, second], startOf, read).sessionFor(64356)).toEqual({ kind: "id", value: OTHER });
++  });
++
++  test("the process start is read once per process, and again for a new session in it only from the file", async () => {
++    const { startOf, asked } = counting(START);
++    const entries = new Map([[`${dir}/64356.json`, recordText({})]]);
++    const sessions = new ClaudePidSessions([dir], startOf, files(entries));
++    await sessions.sessionFor(64356);
++    entries.set(`${dir}/64356.json`, recordText({ sessionId: OTHER }));
++    expect(await sessions.sessionFor(64356)).toEqual({ kind: "id", value: OTHER });
++    expect(asked).toEqual([64356]);
++  });
++
++  test("a pid that is not a positive whole number is never read", async () => {
++    const { startOf, asked } = counting(START);
++    const sessions = new ClaudePidSessions([dir], startOf, files({}));
++    expect(await sessions.sessionFor(0)).toBeNull();
++    expect(await sessions.sessionFor(-3)).toBeNull();
++    expect(await sessions.sessionFor(1.5)).toBeNull();
++    expect(asked).toEqual([]);
++  });
++});
++
++describe("processStartUtc", () => {
++  test("this process has a start time, and no process zero does", async () => {
++    expect(await processStartUtc(process.pid)).toMatch(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u);
++    expect(await processStartUtc(0)).toBeNull();
++  });
++});
+diff --git a/bridge/journal/claude.test.ts b/bridge/journal/claude.test.ts
+index a9b39de8..76876036 100644
+--- a/bridge/journal/claude.test.ts
++++ b/bridge/journal/claude.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, test } from "bun:test";
+-import { mkdir, realpath, rm, symlink, utimes } from "node:fs/promises";
++import { appendFile, mkdir, realpath, rm, symlink, utimes } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ 
+@@ -730,6 +730,42 @@ describe("ClaudeTranscriptSource — rotation following", () => {
+     await rm(dir, { recursive: true, force: true });
+     await rm(outside, { recursive: true, force: true });
+   });
++
++  test("a continuation created after the first resolve is followed on the next one", async () => {
++    const { dir, project } = await fixture();
++    const LATER = "0f0f0f0f-1111-2222-3333-444444444444";
++    const src = new ClaudeTranscriptSource(dir);
++    expect(await src.resolve({ kind: "id", value: OLD })).toEndWith(`${NEW}.jsonl`);
++    await Bun.write(`${project}/${LATER}.jsonl`, Array(5).fill(row(ROOT, "later")).join("\n"));
++    const future = Date.now() / 1000 + 60;
++    await utimes(project, future, future);
++    expect(await src.resolve({ kind: "id", value: OLD })).toEndWith(`${LATER}.jsonl`);
++    await rm(dir, { recursive: true, force: true });
++  });
++
++  test("a log indexed before its first row was written is followed once the row lands", async () => {
++    const { dir, project } = await fixture();
++    const LATER = "0f0f0f0f-1111-2222-3333-444444444444";
++    await Bun.write(`${project}/${LATER}.jsonl`, "");
++    const src = new ClaudeTranscriptSource(dir);
++    expect(await src.resolve({ kind: "id", value: OLD })).toEndWith(`${NEW}.jsonl`);
++    await appendFile(`${project}/${LATER}.jsonl`, Array(5).fill(row(ROOT, "later")).join("\n"));
++    expect(await src.resolve({ kind: "id", value: OLD })).toEndWith(`${LATER}.jsonl`);
++    await rm(dir, { recursive: true, force: true });
++  });
++
++  test("a continuation that grows past another after both were indexed takes over", async () => {
++    const { dir, project } = await fixture();
++    const LATER = "0f0f0f0f-1111-2222-3333-444444444444";
++    await Bun.write(`${project}/${LATER}.jsonl`, [row(ROOT, "one"), row("u2", "two")].join("\n"));
++    const past = Date.now() / 1000 - 300;
++    await utimes(`${project}/${LATER}.jsonl`, past, past);
++    const src = new ClaudeTranscriptSource(dir);
++    expect(await src.resolve({ kind: "id", value: OLD })).toEndWith(`${NEW}.jsonl`);
++    await appendFile(`${project}/${LATER}.jsonl`, "\n" + Array(5).fill(row("u9", "more")).join("\n"));
++    expect(await src.resolve({ kind: "id", value: OLD })).toEndWith(`${LATER}.jsonl`);
++    await rm(dir, { recursive: true, force: true });
++  });
+ });
+ 
+ // Multi-root resolution (issue #92). `CLAUDE_CONFIG_DIR` gives each Claude profile its own projects
+diff --git a/bridge/mux/fixtures.ts b/bridge/mux/fixtures.ts
+index f20caa1e..3244e620 100644
+--- a/bridge/mux/fixtures.ts
++++ b/bridge/mux/fixtures.ts
+@@ -34,6 +34,7 @@ import { herdrCoreMuxFactory } from "./herdr-core/adapter.ts";
+ import { FakeHcCore } from "./herdr-core/fake-core.ts";
+ import { herdrCoreConformanceFixture, herdrCoreWorld } from "./herdr-core/fixture.ts";
+ import { herdrCoreBeaconMatcher } from "./herdr-core/markers.ts";
++import { rexConformanceFixture } from "./rex/fixture.ts";
+ import { tmuxMuxFactory } from "./tmux/adapter.ts";
+ import { FakeTmux, FAKE_TMUX_SOCKET, tmuxConformanceFixture, tmuxWorld } from "./tmux/fixture.ts";
+ import { tmuxBeaconMatcher } from "./tmux/markers.ts";
+@@ -186,6 +187,7 @@ export const MUX_CONFORMANCE_FIXTURES: readonly MuxConformanceFixture[] = [
+   durableConformanceFixture,
+   durableHttpConformanceFixture,
+   herdrCoreConformanceFixture,
++  rexConformanceFixture,
+   { mux: ternMuxFactory.mux, variant: "beacons, hooks installed", create: () => ternDecoratedWorld(true) },
+   { mux: ternMuxFactory.mux, variant: "beacons, hooks absent", create: () => ternDecoratedWorld(false) },
+   { mux: tmuxMuxFactory.mux, variant: "beacons, hooks installed", create: () => tmuxDecoratedWorld(true) },
+diff --git a/bridge/mux/keys.test.ts b/bridge/mux/keys.test.ts
+index fd9517b6..38d8a740 100644
+--- a/bridge/mux/keys.test.ts
++++ b/bridge/mux/keys.test.ts
+@@ -12,6 +12,7 @@ import {
+   MUX_NAMED_KEYS,
+   parseMuxKey,
+ } from "./keys.ts";
++import { toRexKey } from "./rex/keys.ts";
+ import { toTernKey } from "./tern/keys.ts";
+ import { toTmuxKey } from "./tmux/keys.ts";
+ import { toTuiosKey } from "./tuios/keys.ts";
+@@ -118,13 +119,17 @@ describe("ctrl+Enter, the chord that needs an extended keyboard encoding", () =>
+     expect(toHerdrKey("ctrl+Enter").ok).toBe(true);
+   });
+ 
++  test("Rex sends it as ESC[27;5;13~, as probed against a raw reader on Rex 0.0.1793377904", () => {
++    expect(toRexKey("ctrl+Enter")).toEqual({ ok: true, key: "ctrl+enter" });
++  });
++
+   test("every adapter that refuses it declares it, so a surface can ask before it offers a button", async () => {
+     for (const fixture of MUX_CONFORMANCE_FIXTURES) {
+       const world = await fixture.create();
+       try {
+         const deliverable = keysDeliverable(world.adapter.capabilities, ["ctrl+Enter"]);
+         expect(deliverable, `${fixture.mux}${fixture.variant === undefined ? "" : ` (${fixture.variant})`}`).toBe(
+-          fixture.mux === "herdr",
++          fixture.mux === "herdr" || fixture.mux === "rex",
+         );
+       } finally {
+         await world.close();
+diff --git a/bridge/mux/logo.test.ts b/bridge/mux/logo.test.ts
+index 81e1df6e..87a8b147 100644
+--- a/bridge/mux/logo.test.ts
++++ b/bridge/mux/logo.test.ts
+@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
+ import { DURABLE_LOGO_SVG } from "./durable/logo.ts";
+ import { HERDR_LOGO_SVG } from "./herdr/logo.ts";
+ import { HERDR_CORE_LOGO_SVG } from "./herdr-core/logo.ts";
++import { REX_LOGO_SVG } from "./rex/logo.ts";
+ import { TERN_LOGO_SVG } from "./tern/logo.ts";
+ import { TMUX_LOGO_SVG } from "./tmux/logo.ts";
+ import { TUIOS_LOGO_SVG } from "./tuios/logo.ts";
+@@ -28,6 +29,7 @@ const LOGOS: readonly [name: string, svg: string][] = [
+   ["tuios", TUIOS_LOGO_SVG],
+   ["durable", DURABLE_LOGO_SVG],
+   ["herdr-core", HERDR_CORE_LOGO_SVG],
++  ["rex", REX_LOGO_SVG],
+ ];
+ 
+ /** Roughly what a `<img>` in a header should ever cost. Not a limit anyone should need to raise. */
+diff --git a/bridge/mux/registry.test.ts b/bridge/mux/registry.test.ts
+index d4e79db0..4be1ccc3 100644
+--- a/bridge/mux/registry.test.ts
++++ b/bridge/mux/registry.test.ts
+@@ -93,7 +93,7 @@ describe("buildMuxRegistry", () => {
+ 
+   // Herdr landed behind the contract in spec 02; tmux appended one entry in 04, zellij will in 05.
+   test("the shipped list builds", () => {
+-    expect(muxNames(buildMuxRegistry())).toEqual(["durable", "herdr", "herdr-core", "tern", "tmux", "tuios", "zellij"]);
++    expect(muxNames(buildMuxRegistry())).toEqual(["durable", "herdr", "herdr-core", "rex", "tern", "tmux", "tuios", "zellij"]);
+   });
+ });
+ 
+diff --git a/bridge/mux/rex/adapter.test.ts b/bridge/mux/rex/adapter.test.ts
+new file mode 100644
+index 00000000..76e44c2b
+--- /dev/null
++++ b/bridge/mux/rex/adapter.test.ts
+@@ -0,0 +1,191 @@
++import { describe, expect, test } from "bun:test";
++
++import { RexMux, rexMuxFactory, type RexSessionLookup } from "./adapter.ts";
++import type { RexExec, RexRunResult } from "./exec.ts";
++import { FAKE_CLAUDE_PID, FAKE_CLAUDE_SESSION, FakeRex, fakeClaudeSessions, parseRexScript } from "./fixture.ts";
++import { MAX_WRITE_JSON_BYTES, type RexOp } from "./protocol.ts";
++
++interface RecordedCall {
++  readonly args: readonly string[];
++  readonly stdin?: string;
++}
++
++interface Answering {
++  readonly exec: RexExec;
++  readonly calls: RecordedCall[];
++}
++
++function answering(result: RexRunResult): Answering {
++  const calls: RecordedCall[] = [];
++  return {
++    calls,
++    exec: {
++      run: (args, stdin) => {
++        calls.push({ args, stdin });
++        return Promise.resolve(result);
++      },
++      events: () => ({ kill: () => undefined }),
++    },
++  };
++}
++
++function spyingOps(fake: FakeRex, onOp: (op: RexOp) => void): RexExec {
++  return {
++    run: (args, stdin) => {
++      const op = stdin === undefined ? null : parseRexScript(stdin);
++      if (op !== null) onOp(op);
++      return fake.run(args, stdin);
++    },
++    events: (h) => fake.events(h),
++  };
++}
++
++async function firstPane(adapter: RexMux, agent = "claude"): Promise<string> {
++  const pane = (await adapter.snapshot()).panes.find((p) => p.agent === agent);
++  if (pane === undefined) throw new Error(`no ${agent} pane`);
++  return pane.paneId;
++}
++
++describe("typing", () => {
++  test("one line is typed, and a line break makes it a paste so nothing is submitted", async () => {
++    const fake = new FakeRex();
++    const adapter = new RexMux(fake);
++    const pane = await firstPane(adapter);
++    const ops: RexOp[] = [];
++    const spied = new RexMux(spyingOps(fake, (op) => ops.push(op)));
++    expect((await spied.typeText(pane, "hello")).ok).toBe(true);
++    expect((await spied.typeText(pane, "two\nlines")).ok).toBe(true);
++    expect(ops).toMatchObject([{ op: "write", paste: false }, { op: "write", paste: true }]);
++  });
++
++  test("a message past Rex's request limit is refused whole, never split", async () => {
++    const { exec, calls } = answering({ code: 0, stdout: "", stderr: "" });
++    const sent = await new RexMux(exec).typeText("block:x", "x".repeat(MAX_WRITE_JSON_BYTES));
++    expect(sent).toMatchObject({ ok: false, reason: "refused" });
++    expect(calls).toHaveLength(0);
++  });
++
++  test("a write that ran out of time may still land, so it is unconfirmed", async () => {
++    const { exec } = answering({ code: 143, stdout: "", stderr: "rex did not answer `do -` within 5000ms and was killed" });
++    expect(await new RexMux(exec).typeText("block:x", "hi")).toMatchObject({ ok: false, reason: "unconfirmed" });
++  });
++});
++
++describe("keys", () => {
++  test("translated keys go to send-key in one call, after --", async () => {
++    const { exec, calls } = answering({ code: 0, stdout: "", stderr: "" });
++    expect((await new RexMux(exec).writeKeys("block:x", ["ctrl+c", "A", "?", "Enter"])).ok).toBe(true);
++    expect(calls[0]?.args).toEqual(["send-key", "-b", "block:x", "--", "ctrl+c", "shift+a", "shift+/", "enter"]);
++  });
++
++  test("one key Rex cannot send refuses the batch before anything is sent", async () => {
++    const { exec, calls } = answering({ code: 0, stdout: "", stderr: "" });
++    expect(await new RexMux(exec).writeKeys("block:x", ["a", "meta+v"])).toMatchObject({ ok: false, reason: "refused" });
++    expect(calls).toHaveLength(0);
++  });
++});
++
++describe("refusals", () => {
++  test("a missing target is gone, a missing server unreachable", async () => {
++    expect(await new RexMux(answering({ code: 3, stdout: "", stderr: 'Error: block target "block:x" not found' }).exec).writeKeys("block:x", ["a"]))
++      .toMatchObject({ reason: "gone" });
++    expect(await new RexMux(answering({ code: 4, stdout: "", stderr: "Error: no Rex server is running at /s, and autostart is disabled" }).exec).closePane("block:x"))
++      .toMatchObject({ reason: "unreachable" });
++  });
++
++  test("a label longer than Rex takes is refused before it is sent", async () => {
++    const { exec, calls } = answering({ code: 0, stdout: "", stderr: "" });
++    expect(await new RexMux(exec).renameTab("window:x", "x".repeat(129))).toMatchObject({ reason: "refused" });
++    expect(calls).toHaveLength(0);
++  });
++});
++
++describe("structure", () => {
++  test("a new tab never moves the active window and opens where it was asked", async () => {
++    const fake = new FakeRex();
++    const adapter = new RexMux(fake);
++    const space = (await adapter.snapshot()).spaces[0];
++    if (space === undefined) throw new Error("no space");
++    const created = await adapter.createTab({ spaceId: space.spaceId, cwd: "/srv/x", label: "fresh" });
++    expect(created.ok).toBe(true);
++    expect(fake.calls.find((call) => call.startsWith("window new"))).toBe(`window new -s ${space.spaceId} --focus=false --json -c /srv/x`);
++    const after = await adapter.snapshot();
++    expect(after.spaces[0]?.activeTabId).toBe(space.activeTabId);
++    if (created.ok) expect(after.tabs.find((tab) => tab.tabId === created.value.tabId)?.label).toBe("fresh");
++  });
++
++  test("clearing a pane label restores Rex's default, which reads as no label", async () => {
++    const fake = new FakeRex();
++    const adapter = new RexMux(fake);
++    const pane = await firstPane(adapter);
++    await adapter.renamePane(pane, "mine");
++    expect((await adapter.snapshot()).panes.find((p) => p.paneId === pane)?.paneLabel).toBe("mine");
++    await adapter.renamePane(pane, null);
++    expect((await adapter.snapshot()).panes.find((p) => p.paneId === pane)?.paneLabel).toBeUndefined();
++  });
++});
++
++describe("reading the grid", () => {
++  test("the revision follows the screen, whatever styling or depth was asked for", async () => {
++    const fake = new FakeRex();
++    const adapter = new RexMux(fake);
++    const pane = await firstPane(adapter);
++    const a = await adapter.readGrid(pane, { scope: "viewport", lines: 24, styling: "preserve" });
++    const b = await adapter.readGrid(pane, { scope: "recent", lines: 200, styling: "strip" });
++    if (!a.ok || !b.ok) throw new Error("read failed");
++    expect(a.value.revision).toBe(b.value.revision);
++    await fake.changePane(pane);
++    const c = await adapter.readGrid(pane, { scope: "viewport", lines: 24, styling: "preserve" });
++    if (!c.ok) throw new Error("read failed");
++    expect(c.value.revision).toBe(a.value.revision + 1);
++  });
++
++  test("a strip read asks Rex for vt too, because Rex's text format drops a shell's blank screen rows", async () => {
++    const fake = new FakeRex();
++    const pane = await firstPane(new RexMux(fake));
++    const formats: string[] = [];
++    const spy = spyingOps(fake, (op) => {
++      if (op.op === "tail") formats.push(op.format);
++    });
++    const grid = await new RexMux(spy).readGrid(pane, { scope: "viewport", lines: 24, styling: "strip" });
++    expect(formats).toEqual(["vt"]);
++    expect(grid.ok && grid.value.text.includes("\u001b[")).toBe(false);
++  });
++});
++
++describe("sessions", () => {
++  test("the pid that reported Claude's status is looked up, and its session reaches the Claude pane only", async () => {
++    const asked: number[] = [];
++    const inner = fakeClaudeSessions();
++    const lookup: RexSessionLookup = {
++      sessionFor: (pid) => {
++        asked.push(pid);
++        return inner.sessionFor(pid);
++      },
++    };
++    const snapshot = await new RexMux(new FakeRex(), lookup).snapshot();
++    expect(asked).toEqual([FAKE_CLAUDE_PID]);
++    expect(snapshot.panes.filter((pane) => pane.agentSession !== undefined).map((pane) => [pane.agent, pane.agentSession?.value])).toEqual([
++      ["claude", FAKE_CLAUDE_SESSION],
++    ]);
++  });
++
++  test("a lookup that fails leaves the pane without a session and the snapshot still answers", async () => {
++    const failing: RexSessionLookup = { sessionFor: () => Promise.reject(new Error("unreadable")) };
++    const snapshot = await new RexMux(new FakeRex(), failing).snapshot();
++    expect(snapshot.panes.some((pane) => pane.agent === "claude")).toBe(true);
++    expect(snapshot.panes.every((pane) => pane.agentSession === undefined)).toBe(true);
++  });
++
++  test("without a lookup no pane carries a session", async () => {
++    const snapshot = await new RexMux(new FakeRex()).snapshot();
++    expect(snapshot.panes.every((pane) => pane.agentSession === undefined)).toBe(true);
++  });
++});
++
++describe("rexMuxFactory", () => {
++  test("names the socket it was given, or Rex's own default", () => {
++    expect(rexMuxFactory.describeTarget?.("")).toBe("its default socket");
++    expect(rexMuxFactory.describeTarget?.("/tmp/r.sock")).toBe("socket /tmp/r.sock");
++  });
++});
+diff --git a/bridge/mux/rex/captures.test.ts b/bridge/mux/rex/captures.test.ts
+new file mode 100644
+index 00000000..a3fa8f39
+--- /dev/null
++++ b/bridge/mux/rex/captures.test.ts
+@@ -0,0 +1,134 @@
++import { describe, expect, test } from "bun:test";
++import { readFileSync } from "node:fs";
++import { join } from "node:path";
++
++import { asJsonNumber, asJsonObject, asJsonString, parseJson, type JsonObject } from "../../../web/src/lib/json.ts";
++import { normalizeProcessStart, parseClaudePidRecord } from "../../journal/claude-pid.ts";
++import { isValidMuxId } from "../types.ts";
++import { gridRows, sessionPids, toSnapshot } from "./layout.ts";
++import type { JsonValue } from "../../json.ts";
++import { censusSignature, decodeCensus, decodeSnapshot, decodeTail, parseAnswer, parseEvent } from "./protocol.ts";
++import { refusalForAnswer } from "./refusal.ts";
++
++const here = join(import.meta.dir, "captures");
++const read = (name: string): string => readFileSync(join(here, name), "utf8");
++
++function value(name: string): JsonValue {
++  const answer = parseAnswer(read(name));
++  if (answer === null || !answer.ok) throw new Error(`${name} is not a successful answer`);
++  return answer.value;
++}
++
++const EVENTS = read("events.ndjson").split("\n").filter((line) => line.trim() !== "");
++
++describe("a recorded snapshot", () => {
++  const snapshot = toSnapshot(decodeSnapshot(value("snapshot.json")));
++
++  test("maps sessions, windows and blocks to spaces, tabs and panes with exact ids", () => {
++    expect(snapshot.spaces.map((space) => space.label)).toEqual(["probe-a", "probe-b"]);
++    expect(snapshot.tabs.map((tab) => tab.label)).toEqual(["1", "review", "keys"]);
++    expect(snapshot.panes).toHaveLength(3);
++    for (const pane of snapshot.panes) expect(isValidMuxId(pane.paneId)).toBe(true);
++    expect(snapshot.panes.every((pane) => pane.paneId.startsWith("block:"))).toBe(true);
++  });
++
++  test("names Claude from its own report and Codex from its foreground process", () => {
++    const byAgent = new Map(snapshot.panes.map((pane) => [pane.agent, pane]));
++    expect(byAgent.get("claude")?.status).toBe("done");
++    expect(byAgent.get("codex")?.status).toBe("unknown");
++    expect(byAgent.get("shell")?.paneLabel).toBe("probe label");
++  });
++
++  test("an app-less server focuses nothing, and its empty client list arrives as {}", () => {
++    expect(read("snapshot.json")).toContain('"clients":{}');
++    expect(snapshot.panes.some((pane) => pane.focused)).toBe(false);
++    expect(snapshot.spaces.some((space) => space.focused)).toBe(false);
++  });
++
++  test("a default window label is a number, and only a chosen one names a pane's tab", () => {
++    const unnamed = snapshot.panes.find((pane) => pane.agent === "shell");
++    const named = snapshot.panes.find((pane) => pane.agent === "claude");
++    expect(unnamed?.tabNamed).toBeUndefined();
++    expect(named).toMatchObject({ tabLabel: "review", tabNamed: true });
++  });
++});
++
++describe("a recorded census", () => {
++  test("signs every session", () => {
++    const signature = censusSignature(decodeCensus(value("census.json")));
++    expect(signature.split(";").filter((part) => part.startsWith("s:"))).toHaveLength(2);
++  });
++});
++
++describe("recorded tails", () => {
++  test("a whole read keeps SGR, turns ESC[nC into spaces and carries no other escape", () => {
++    const tail = decodeTail(value("tail-claude-vt.json"));
++    expect(tail.content).toContain("\u001b[1C");
++    const { rows, cutAbove } = gridRows(tail.content, tail.start);
++    const text = rows.join("\n");
++    expect(cutAbove).toBe(false);
++    // eslint-disable-next-line no-control-regex
++    expect(text).not.toMatch(/\u001b\[[0-9;]*[^0-9;m]/u);
++    expect(text).toContain("\u001b[0m");
++    expect(text).toContain("run a command");
++    expect(text).not.toContain("\r");
++  });
++
++  test("a read cut mid-buffer drops its first, partial row", () => {
++    const whole = decodeTail(value("tail-claude-vt.json"));
++    const cut = decodeTail(value("tail-claude-cut.json"));
++    expect(cut.start).toBeGreaterThan(0);
++    expect(cut.total).toBe(whole.total);
++    const rows = gridRows(cut.content, cut.start);
++    expect(rows.cutAbove).toBe(true);
++    const wholeRows = gridRows(whole.content, whole.start).rows;
++    expect(wholeRows.slice(-rows.rows.length)).toEqual([...rows.rows]);
++  });
++
++  test("a missing block answers Rex's 404, which is gone", () => {
++    const answer = parseAnswer(read("missing-block.json"));
++    expect(answer?.ok).toBe(false);
++    if (answer === null || answer.ok) return;
++    expect(refusalForAnswer(answer.error).reason).toBe("gone");
++  });
++});
++
++describe("recorded events", () => {
++  test("every line parses", () => {
++    for (const line of EVENTS) expect(parseEvent(line)).not.toBeNull();
++  });
++});
++
++describe("a recorded Claude pid record", () => {
++  const capture = asJsonObject(parseJson(read("claude-pid-record.json"))) ?? {};
++  const part = (name: string): JsonObject => asJsonObject(capture[name]) ?? {};
++  const blockOf = (name: string): JsonObject => asJsonObject(part(name).block) ?? {};
++  const foregroundPid = (name: string): number => asJsonNumber((asJsonObject(blockOf(name).fg) ?? {}).pid) ?? 0;
++  const recordText = (name: string): string => JSON.stringify(part(name).record ?? null);
++
++  test("the snapshot's Claude pane is looked up by the pid that reported its status", () => {
++    const raw = decodeSnapshot(value("snapshot.json"));
++    expect([...sessionPids(raw).values()]).toEqual([30638]);
++  });
++
++  test("the reporting pid is the foreground pid, and its record names the session of the first turn's transcript", () => {
++    const pid = foregroundPid("started");
++    const status = asJsonObject(blockOf("started").status) ?? {};
++    const reported = status.records;
++    const owner = Array.isArray(reported) ? asJsonObject(asJsonObject(reported[0])?.owner) : undefined;
++    expect(asJsonNumber(owner?.pid)).toBe(pid);
++    const record = parseClaudePidRecord(recordText("started"), pid);
++    expect(`${record?.sessionId ?? ""}.jsonl`).toBe(asJsonString(capture.first_turn_transcript) ?? "");
++    expect(record?.procStart).toBe(normalizeProcessStart(asJsonString(part("started").ps_lstart_utc) ?? ""));
++  });
++
++  test("/clear rewrites the same pid's record with a new session, and exit removes it", () => {
++    const pid = foregroundPid("started");
++    const started = parseClaudePidRecord(recordText("started"), pid);
++    const cleared = parseClaudePidRecord(recordText("cleared"), pid);
++    expect(cleared?.procStart).toBe(started?.procStart ?? "");
++    expect(cleared?.sessionId).not.toBe(started?.sessionId ?? "");
++    expect(parseClaudePidRecord(recordText("started"), pid + 1)).toBeNull();
++    expect(part("exited").record).toBeNull();
++  });
++});
+diff --git a/bridge/mux/rex/captures/README.md b/bridge/mux/rex/captures/README.md
+new file mode 100644
+index 00000000..9eb5012a
+--- /dev/null
++++ b/bridge/mux/rex/captures/README.md
+@@ -0,0 +1,60 @@
++# Recorded Rex output
++
++Real output of **rex 0.0.1793377904 (`e6592f7`)** on macOS, recorded on 2026-10-31 against a private
++server (`rex server run --listen unix://… --restore=false`), never an operator's own. The home folder
++is renamed to `/Users/you` and the host in one `file://` URL to `host`. Nothing else is changed.
++
++- `snapshot.json` and `census.json` are the adapter's own `snapshot` and `census` calls: the program
++  in `protocol.ts` run by `rex do -`, printed as one line. The server had two sessions, a Claude
++  Code block reporting through OSC 7501, a Codex block reporting nothing, and no app attached, so
++  the client list is Lua's empty table, `{}`.
++- `tail-claude-vt.json` is a `tail` of the Claude block with the whole screen inside the budget, and
++  `tail-claude-cut.json` the same block with a 300-byte budget, which starts mid-buffer.
++- `missing-block.json` is `close_block` on an id the server never had.
++- `events.ndjson` is the first line of each kind `rex events --all --json` printed while the probes
++  below ran.
++- `claude-pid-record.json` is a Claude Code 2.1.309 block followed through its life: the block's
++  `program_status` and foreground process beside Claude's own `~/.claude/sessions/<pid>.json`, at
++  start, after the first turn, after `/clear`, and after exit, with the process start time `ps -o
++  lstart=` printed under `TZ=UTC`.
++
++`captures.test.ts` reads every file through the adapter's own parsers. The fake Rex in `fixture.ts`
++is built by hand. These files are the only bytes in the folder that came from a Rex.
++
++## What the probes showed
++
++Each declared capability rests on one of these, run on the same build and private server:
++
++- **Grid.** A `vt` capture carries SGR and `ESC[nC` and nothing else, CRLF between rows, on the main
++  and the alternate screen. Claude Code's placeholder is SGR 2, so styling is kept and `ESC[nC`
++  becomes spaces. `format` with `max_bytes` answers `total` and an `id`, and `blob_read` reads from
++  any byte offset; an offset inside a character answers U+FFFD for each byte, so the first row of a
++  cut read is dropped. 300 lines of `seq` were all behind a 24-row screen: the scrollback is real.
++- **Agent and status.** Claude Code reports `idle`, `working`, `blocked` with `kind: permission` (a
++  network permission prompt), and `done` as `app: claude-code`, each pushed as
++  `program_status_changed`; on exit it clears its record (`program_status_removed`, `clear`). Codex
++  0.164 reports nothing, and its foreground process is `codex`.
++- **Typing.** The terminal's `write` types text without submitting, leading dashes and UTF-8 intact.
++  A `paste` event arrives inside `ESC[200~ … ESC[201~` when the program asked for bracketed paste.
++  The control channel refuses a request past 65,536 encoded bytes (about 223 of them are the
++  envelope), so a longer message is refused, never split.
++- **Keys.** `send-key` delivers the xterm bytes for every named key, `ctrl+enter` as `ESC[27;5;13~`
++  (never a bare `\r`), and validates the whole list before sending any of it. A capital letter needs
++  `shift+`, and shifted punctuation is reached through its US-layout key (`shift+/` is `?`).
++- **Labels.** A block starts labelled `shell` and clearing its label gives `Block <last 8 of its
++  id>`; a window starts as `Window <last 8 of its id>`. A block rename is pushed only as
++  `session_view_changed`.
++- **Topology.** `window new --focus=false` leaves the active window alone. Closing a block or window
++  twice answers exit 3 (`target … not found`) or `404 not_found`. Ids survive a restart with
++  `--restore`.
++- **Focus.** An app client's `session_ids` lists every session it attached, and selecting another
++  session neither replaces nor reorders it, and the server pushes no event for a switch made in the
++  app. So a space is reported focused only when an app attaches exactly that one session, and
++  `setFocus` is not declared.
++- **Session.** Rex keeps no conversation id, but the Claude record's `owner.pid` is the foreground
++  pid, and Claude Code writes `<config dir>/sessions/<pid>.json` naming its `sessionId`. The first
++  turn's transcript is `<sessionId>.jsonl`. `/clear` rewrites the same file with a new id, and the
++  block's `program_status` is reported in the same millisecond, so the change arrives as a pane
++  event. A clean exit deletes the file. Its `procStart` is the process start in `ps -o lstart`
++  form, in UTC, which is the pid-reuse check. On the operator's own machine, all 23 Claude panes
++  that herdr knew a session for named the same id as their live pid record.
+diff --git a/bridge/mux/rex/captures/census.json b/bridge/mux/rex/captures/census.json
+new file mode 100644
+index 00000000..27564cb9
+--- /dev/null
++++ b/bridge/mux/rex/captures/census.json
+@@ -0,0 +1 @@
++{"ok":true,"value":{"clients":{},"sessions":[{"active":"window:01a19088-3174-7dfe-a5e9-832bd8758d4b","label":"probe-a","revision":14,"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857"},{"active":"window:01a1908d-d035-7cf4-b93b-14f8332b8529","label":"probe-b","revision":4,"session_id":"session:01a19088-31ca-7772-a803-f49237752811"}]}}
+diff --git a/bridge/mux/rex/captures/claude-pid-record.json b/bridge/mux/rex/captures/claude-pid-record.json
+new file mode 100644
+index 00000000..b24e28df
+--- /dev/null
++++ b/bridge/mux/rex/captures/claude-pid-record.json
+@@ -0,0 +1,101 @@
++{
++  "started": {
++    "block": {
++      "block": "block:01a19161-9998-7357-aac4-9a35237349b6",
++      "fg": {
++        "name": "claude",
++        "pid": 91811
++      },
++      "status": {
++        "records": [
++          {
++            "app": "claude-code",
++            "effective_app": "claude-code",
++            "owner": {
++              "name": "claude",
++              "pid": 91811
++            },
++            "state": "idle",
++            "updated_at": "2026-10-31T18:54:17.874268+09:00"
++          }
++        ]
++      }
++    },
++    "record": {
++      "pid": 91811,
++      "sessionId": "87bdacf1-d525-4884-b8d6-d220f575ca05",
++      "cwd": "/Users/you/.cache/nx/rx/probe/cwd",
++      "startedAt": 1793440457774,
++      "procStart": "Sat Oct 31 09:54:16 2026",
++      "version": "2.1.309",
++      "peerProtocol": 1,
++      "peerFeatures": [
++        "notify_idle",
++        "reply_across_default_dirs",
++        "artifact_yield"
++      ],
++      "kind": "interactive",
++      "entrypoint": "cli",
++      "pidDomain": "darwin",
++      "messagingSocketPath": "/tmp/cc-socks/91811.sock",
++      "name": "cwd-2d",
++      "nameSource": "derived",
++      "nameSince": 1793440457774,
++      "status": "idle",
++      "updatedAt": 1793440457874,
++      "statusUpdatedAt": 1793440457874
++    },
++    "ps_lstart_utc": "Sat Oct 31 09:54:16 2026"
++  },
++  "first_turn_transcript": "87bdacf1-d525-4884-b8d6-d220f575ca05.jsonl",
++  "cleared": {
++    "block": {
++      "block": "block:01a19161-9998-7357-aac4-9a35237349b6",
++      "fg": {
++        "name": "claude",
++        "pid": 91811
++      },
++      "status": {
++        "records": [
++          {
++            "app": "claude-code",
++            "effective_app": "claude-code",
++            "owner": {
++              "name": "claude",
++              "pid": 91811
++            },
++            "state": "idle",
++            "updated_at": "2026-10-31T18:55:04.800915+09:00"
++          }
++        ]
++      }
++    },
++    "record": {
++      "pid": 91811,
++      "sessionId": "76dac524-3be1-4942-a71e-7fcb9bbcdeeb",
++      "cwd": "/Users/you/.cache/nx/rx/probe/cwd",
++      "startedAt": 1793440457774,
++      "procStart": "Sat Oct 31 09:54:16 2026",
++      "version": "2.1.309",
++      "peerProtocol": 1,
++      "peerFeatures": [
++        "notify_idle",
++        "reply_across_default_dirs",
++        "artifact_yield"
++      ],
++      "kind": "interactive",
++      "entrypoint": "cli",
++      "pidDomain": "darwin",
++      "messagingSocketPath": "/tmp/cc-socks/91811.sock",
++      "name": "cwd-2d",
++      "nameSource": "derived",
++      "nameSince": 1793440457774,
++      "status": "idle",
++      "updatedAt": 1793440504800,
++      "statusUpdatedAt": 1793440504800
++    }
++  },
++  "exited": {
++    "record": null
++  }
++}
+diff --git a/bridge/mux/rex/captures/events.ndjson b/bridge/mux/rex/captures/events.ndjson
+new file mode 100644
+index 00000000..c84612a4
+--- /dev/null
++++ b/bridge/mux/rex/captures/events.ndjson
+@@ -0,0 +1,21 @@
++{"type":"client_joined","payload":{"client":{"client_id":"client:01a19088-30a2-755b-a5fa-ca0e54d755af","info":{"kind":"cli","platform":"macos","name":"rex","version":"0.0.1793377904-ge6592f"},"principal":{"kind":"peer","transport":"unix","display":"uid 502","uid":502,"gid":20,"pid":735},"connected_at":"2026-10-31T14:56:46.882351+09:00","connection_state":"connected"}}}
++{"type":"session_created","payload":{"session":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","label":"probe-a"}}}
++{"type":"client_left","payload":{"client_id":"client:01a19088-30a2-755b-a5fa-ca0e54d755af"}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"client_connected","payload":{"client_id":"client:01a19088-31a1-7036-adc3-52b5debb0b93","principal":{"kind":"peer","transport":"unix","display":"uid 502","uid":502,"gid":20,"pid":763},"connected_at":"2026-10-31T14:56:47.137636+09:00"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_created","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_owner_changed","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","owner":"client:01a19088-31a1-7036-adc3-52b5debb0b93","reason":"create"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","name":"process_changed","payload":{"generation":1,"foreground":null}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"window_created","payload":{"window_id":"window:01a19088-31b0-77a8-a70c-cad7ef6c7200","label":"review"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"session_view_changed","payload":{"revision":2}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"client_disconnected","payload":{"client_id":"client:01a19088-31a1-7036-adc3-52b5debb0b93","principal":{"kind":"peer","transport":"unix","display":"uid 502","uid":502,"gid":20,"pid":763}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-30a3-738a-887f-2981c2314747","creator_name":"com.superlogical.terminal","name":"pwd_changed","payload":{"pwd":"file://host/Users/you/.cache/nx/rx/probe/cwd","owner":{"pid":779,"name":"fish"}}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-30a3-738a-887f-2981c2314747","creator_name":"com.superlogical.terminal","name":"title_changed","payload":{"title":"~/.c/n/r/p/cwd","owner":{"pid":779,"name":"fish"}}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"idle","app":"claude-code","effective_app":"claude-code","updated_at":"2026-10-31T14:57:40.09406+09:00","owner":{"pid":6998,"name":"claude"}},"reason":"report"}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"working","app":"claude-code","effective_app":"claude-code","updated_at":"2026-10-31T14:57:54.581617+09:00","owner":{"pid":6998,"name":"claude"}},"reason":"report"}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"done","app":"claude-code","effective_app":"claude-code","updated_at":"2026-10-31T14:57:59.506209+09:00","owner":{"pid":6998,"name":"claude"}},"reason":"report"}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","name":"program_status_changed","payload":{"id":"","record":{"state":"blocked","kind":"permission","app":"claude-code","effective_app":"claude-code","msg":"allow network: example.com","updated_at":"2026-10-31T14:58:34.768959+09:00","owner":{"pid":6998,"name":"claude"}},"reason":"report"}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"block_event","payload":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","name":"program_status_removed","payload":{"ids":[""],"reason":"clear"}}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-31ca-7772-a803-f49237752811","event":{"type":"block_closed","payload":{"block_id":"block:01a19088-31ca-7841-a290-69240a10ae80"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-31ca-7772-a803-f49237752811","event":{"type":"window_closed","payload":{"window_id":"window:01a19088-31db-7121-b6ea-d1a4defea1c7"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-31ca-7772-a803-f49237752811","event":{"type":"active_window_changed","payload":{"window_id":"window:01a1908d-d035-7cf4-b93b-14f8332b8529"}}}}
++{"type":"session_event","payload":{"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","event":{"type":"window_label_changed","payload":{"window_id":"window:01a19091-e556-7ad1-aa67-8fb495e9f4cb","label":"renamed tab"}}}}
+diff --git a/bridge/mux/rex/captures/missing-block.json b/bridge/mux/rex/captures/missing-block.json
+new file mode 100644
+index 00000000..da9ab59d
+--- /dev/null
++++ b/bridge/mux/rex/captures/missing-block.json
+@@ -0,0 +1 @@
++{"error":"block:01a19088-0000-7000-8000-000000000000 not found (status=404 code=not_found)","ok":false}
+diff --git a/bridge/mux/rex/captures/snapshot.json b/bridge/mux/rex/captures/snapshot.json
+new file mode 100644
+index 00000000..852c3525
+--- /dev/null
++++ b/bridge/mux/rex/captures/snapshot.json
+@@ -0,0 +1 @@
++{"ok":true,"value":{"clients":{},"host_id":"8266e984-e5cb-43a7-b197-4e21bdc24624","sessions":[{"blocks":{"block:01a19088-30a3-738a-887f-2981c2314747":{"process":{"ancestors":[{"name":"login","path":"/usr/bin/login","pid":758,"user":"root","user_id":0}],"child":{"name":"login","path":"/usr/bin/login","pid":758,"user":"root","user_id":0},"foreground":{"argv0":"-fish","cwd":"/Users/you/.cache/nx/rx/probe/cwd","invoked_path":"/run/current-system/sw/bin/fish","name":"fish","path":"/nix/store/lawp3hlyvp1n13k4w5fkgxc13iwpfr85-fish-4.7.1/bin/fish","pid":779,"user":"you","user_id":502},"home":"/Users/you"},"program_status":{"records":{}},"title":{"owner":{"name":"fish","pid":779},"title":"~/.c/n/r/p/cwd"}},"block:01a19088-31a2-7069-a1a2-14d347b49fe0":{"process":{"ancestors":[{"argv0":"-fish","cwd":"/Users/you/.cache/nx/rx/probe/cwd","invoked_path":"/run/current-system/sw/bin/fish","name":"fish","path":"/nix/store/lawp3hlyvp1n13k4w5fkgxc13iwpfr85-fish-4.7.1/bin/fish","pid":780,"user":"you","user_id":502},{"name":"login","path":"/usr/bin/login","pid":769,"user":"root","user_id":0}],"child":{"name":"login","path":"/usr/bin/login","pid":769,"user":"root","user_id":0},"foreground":{"argv0":"claude","cwd":"/Users/you/.cache/nx/rx/probe/cwd","invoked_path":"/opt/homebrew/bin/claude","name":"claude","path":"/opt/homebrew/Caskroom/claude-code@latest/2.1.309/claude","pid":30638,"user":"you","user_id":502},"home":"/Users/you"},"program_status":{"records":[{"app":"claude-code","effective_app":"claude-code","owner":{"name":"claude","pid":30638},"state":"done","updated_at":"2026-10-31T15:07:10.192938+09:00"}]},"title":{"owner":{"name":"claude","pid":30638},"title":"Claude Code"}}},"label":"probe-a","session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","view":{"active_window_id":"window:01a19088-3174-7dfe-a5e9-832bd8758d4b","label":"probe-a","revision":14,"session_id":"session:01a19088-30a3-7261-abed-5a1005cdd857","windows":[{"focused_block_id":"block:01a19088-30a3-738a-887f-2981c2314747","label":"Window d8758d4b","layers":[{"blocks":[{"block_id":"block:01a19088-30a3-738a-887f-2981c2314747","creator_name":"com.superlogical.terminal","flavor":"com.superlogical.terminal.shell","host_id":"8266e984-e5cb-43a7-b197-4e21bdc24624","label":"probe label","owner":"client:01a19088-30a2-755b-a5fa-ca0e54d755af"}],"bounds":[0,0,1,1],"kind":"tiled","layer_id":"layer:01a19088-3174-7e01-b7e7-71375c9da365","layout":{"block_id":"block:01a19088-30a3-738a-887f-2981c2314747","rect":[0,0,1,1]}}],"window_id":"window:01a19088-3174-7dfe-a5e9-832bd8758d4b"},{"focused_block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","label":"review","layers":[{"blocks":[{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","creator_name":"com.superlogical.terminal","flavor":"com.superlogical.terminal.shell","host_id":"8266e984-e5cb-43a7-b197-4e21bdc24624","label":"shell"}],"bounds":[0,0,1,1],"kind":"tiled","layer_id":"layer:01a19088-31b0-77b0-acfd-7d380684bd25","layout":{"block_id":"block:01a19088-31a2-7069-a1a2-14d347b49fe0","rect":[0,0,1,1]}}],"window_id":"window:01a19088-31b0-77a8-a70c-cad7ef6c7200"}]}},{"blocks":{"block:01a1908d-d025-755f-97d3-eeee9d190acf":{"process":{"ancestors":[{"argv0":"-fish","cwd":"/Users/you/.cache/nx/rx/probe/cwd","invoked_path":"/run/current-system/sw/bin/fish","name":"fish","path":"/nix/store/lawp3hlyvp1n13k4w5fkgxc13iwpfr85-fish-4.7.1/bin/fish","pid":56693,"user":"you","user_id":502},{"name":"login","path":"/usr/bin/login","pid":56682,"user":"root","user_id":0}],"child":{"name":"login","path":"/usr/bin/login","pid":56682,"user":"root","user_id":0},"foreground":{"argv0":"codex","cwd":"/Users/you/.cache/nx/rx/probe/cwd","invoked_path":"/opt/homebrew/bin/codex","name":"codex","path":"/opt/homebrew/Caskroom/codex/0.164.0/bin/codex","pid":43284,"user":"you","user_id":502},"home":"/Users/you"},"program_status":{"records":{}},"title":{"owner":{"name":"fish","pid":56693},"title":"clear; codex ~/.c/n/r/p/cwd"}}},"label":"probe-b","session_id":"session:01a19088-31ca-7772-a803-f49237752811","view":{"active_window_id":"window:01a1908d-d035-7cf4-b93b-14f8332b8529","label":"probe-b","revision":4,"session_id":"session:01a19088-31ca-7772-a803-f49237752811","windows":[{"focused_block_id":"block:01a1908d-d025-755f-97d3-eeee9d190acf","label":"keys","layers":[{"blocks":[{"block_id":"block:01a1908d-d025-755f-97d3-eeee9d190acf","creator_name":"com.superlogical.terminal","flavor":"com.superlogical.terminal.shell","host_id":"8266e984-e5cb-43a7-b197-4e21bdc24624","label":"shell"}],"bounds":[0,0,1,1],"kind":"tiled","layer_id":"layer:01a1908d-d035-7cfc-9b97-d02e43e59bfb","layout":{"block_id":"block:01a1908d-d025-755f-97d3-eeee9d190acf","rect":[0,0,1,1]}}],"window_id":"window:01a1908d-d035-7cf4-b93b-14f8332b8529"}]}}]}}
+diff --git a/bridge/mux/rex/captures/tail-claude-cut.json b/bridge/mux/rex/captures/tail-claude-cut.json
+new file mode 100644
+index 00000000..f1b9ff27
+--- /dev/null
++++ b/bridge/mux/rex/captures/tail-claude-cut.json
+@@ -0,0 +1 @@
++{"ok":true,"value":{"content":"��─\u001b[0m\r\n\u001b[2C\u001b[0m\u001b[38;2;255;193;7m⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker\u001b[0m\u001b[38;2;153;153;153m · r…\u001b[0m\r\n\u001b[2C\u001b[0m\u001b[38;2;153;153;153mHaiku 5.5 (medium) | ~/.cache/nx/rx/probe/cwd | ctx:6% | 5h:1% | 7d:5%\u001b[0m\r\n\u001b[2C\u001b[0m\u001b[38;2;153;153;153m⏸ manual mode on\u001b[0m","rows":24,"start":1598,"total":1898}}
+diff --git a/bridge/mux/rex/captures/tail-claude-vt.json b/bridge/mux/rex/captures/tail-claude-vt.json
+new file mode 100644
+index 00000000..ffc8d649
+--- /dev/null
++++ b/bridge/mux/rex/captures/tail-claude-vt.json
+@@ -0,0 +1 @@
++{"ok":true,"value":{"content":"\r\n\u001b[0m\u001b[38;2;215;119;87m ▐\u001b[0m\u001b[38;2;215;119;87m\u001b[48;2;0;0;0m▛███▛█\u001b[3C\u001b[0m\u001b[1mClaude Code\u001b[1C\u001b[0m\u001b[38;2;153;153;153mv2.1.309\u001b[0m\r\n\u001b[0m\u001b[38;2;215;119;87m▝▜\u001b[0m\u001b[38;2;215;119;87m\u001b[48;2;0;0;0m█████\u001b[0m\u001b[38;2;215;119;87m█▀\u001b[2C\u001b[0m\u001b[38;2;153;153;153mHaiku 5.5 · Claude Ultra\u001b[0m\r\n\u001b[0m\u001b[38;2;215;119;87m ▝▝   ▝▝ \u001b[2C\u001b[0m\u001b[38;2;153;153;153m~/.cache/nx/rx/probe/cwd\u001b[0m\r\n\r\n\r\n\u001b[0m\u001b[38;2;153;153;153m\u001b[48;2;55;55;55m❯ \u001b[0m\u001b[38;2;255;255;255m\u001b[48;2;55;55;55mabc\u001b[0m\u001b[48;2;55;55;55m                                                                           \u001b[0m\r\n\r\n \u001b[1C\u001b[0m\u001b[38;2;153;153;153mThought for \u001b[0m\u001b[1m\u001b[38;2;153;153;153m3s\u001b[0m\u001b[38;2;153;153;153m \u001b[0m\r\n\r\n\u001b[0m\u001b[38;2;255;255;255m⏺\u001b[1C\u001b[0m\"abc\" doesn't tell me what you need. Could you say what you'd like me to do?\r\n\u001b[2CFor example, I can read or edit files in\r\n\u001b[2C\u001b[0m\u001b[38;2;177;185;249m/Users/you/.cache/nx/rx/probe/cwd\u001b[0m,\u001b[1Crun\u001b[1Ca\u001b[1Ccommand,\u001b[1Cor\u001b[1Clook\u001b[1Csomething\u001b[1Cup.\r\n\r\n\u001b[0m\u001b[38;2;153;153;153m✻\u001b[1CCogitated for 4s · done 3:07 PM\u001b[0m\r\n\r\n\r\n\r\n\u001b[0m\u001b[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────\u001b[0m\r\n❯ def\r\n\u001b[0m\u001b[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────\u001b[0m\r\n\u001b[2C\u001b[0m\u001b[38;2;255;193;7m⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker\u001b[0m\u001b[38;2;153;153;153m · r…\u001b[0m\r\n\u001b[2C\u001b[0m\u001b[38;2;153;153;153mHaiku 5.5 (medium) | ~/.cache/nx/rx/probe/cwd | ctx:6% | 5h:1% | 7d:5%\u001b[0m\r\n\u001b[2C\u001b[0m\u001b[38;2;153;153;153m⏸ manual mode on\u001b[0m","rows":24,"start":0,"total":1898}}
+diff --git a/bridge/mux/rex/fixture.ts b/bridge/mux/rex/fixture.ts
+new file mode 100644
+index 00000000..cc99739f
+--- /dev/null
++++ b/bridge/mux/rex/fixture.ts
+@@ -0,0 +1,579 @@
++import { asJsonNumber, asJsonObject, asJsonString, parseJson } from "../../../web/src/lib/json.ts";
++import type { AgentSessionRef } from "../../journal/types.ts";
++import type { MuxConformanceFixture, MuxConformanceWorld, MuxWrite } from "../conformance.ts";
++import { RexMux, type RexSessionLookup } from "./adapter.ts";
++import type { RexExec, RexRunResult, RexStreamClient, RexStreamHandlers } from "./exec.ts";
++import type { JsonValue } from "../../json.ts";
++import { REX_PROGRAM, TERMINAL_CREATOR, type RexOp } from "./protocol.ts";
++
++const FAKE_HOST_ID = "8266e984-e5cb-43a7-b197-4e21bdc24624";
++const REMOTE_HOST_ID = "11111111-2222-4333-8444-555555555555";
++const ONBOARDING_CREATOR = "com.superlogical.onboarding";
++const FAKE_SOCKET = "/tmp/fake-rex/server.sock";
++export const FAKE_CLAUDE_PID = 6998;
++export const FAKE_CLAUDE_SESSION = "5f1d1c0e-8a3b-4c2d-9e7f-0a1b2c3d4e5f";
++
++const NAMED = new Set([
++  "up", "down", "left", "right", "tab", "enter", "escape", "space", "backspace", "delete", "insert", "home", "end",
++  "pageup", "pagedown", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
++]);
++const UNSHIFTED = /^[a-z0-9`\-=[\]\\;',./]$/u;
++const SCRIPT_HEADER = /^local ARGS = \[(=*)\[([\s\S]*?)\]\1\]\n/u;
++
++export function parseRexScript(script: string): RexOp | null {
++  const match = SCRIPT_HEADER.exec(script);
++  if (match?.[2] === undefined || script.slice(match[0].length) !== REX_PROGRAM) return null;
++  const args = asJsonObject(parseJson(match[2])) ?? {};
++  const str = (key: string): string => asJsonString(args[key]) ?? "";
++  if (str("terminal") !== TERMINAL_CREATOR) return null;
++  const block = str("block");
++  const window = str("window");
++  switch (str("op")) {
++    case "snapshot":
++      return { op: "snapshot" };
++    case "census":
++      return { op: "census" };
++    case "tail":
++      return { op: "tail", block, format: str("format") === "text" ? "text" : "vt", bytes: asJsonNumber(args.bytes) ?? 0 };
++    case "process":
++      return { op: "process", block };
++    case "write":
++      return { op: "write", block, text: str("text"), paste: args.paste === true };
++    case "label_block":
++      return { op: "label_block", block, label: str("label") };
++    case "label_window":
++      return { op: "label_window", window, label: str("label") };
++    case "close_block":
++      return { op: "close_block", block };
++    case "close_window":
++      return { op: "close_window", window };
++    default:
++      return null;
++  }
++}
++
++interface FakeRecord {
++  state: string;
++  app: string;
++  effective_app: string;
++  updated_at: string;
++  owner: { pid: number; name: string };
++}
++
++interface FakeForeground {
++  pid: number;
++  name: string;
++  cwd: string;
++}
++
++interface FakeBlock {
++  id: string;
++  windowId: string;
++  sessionId: string;
++  creator: string;
++  hostId: string;
++  label: string;
++  foreground: FakeForeground | null;
++  records: FakeRecord[];
++  title: string;
++  rows: string[];
++  lastExit: { exit_code: number } | null;
++}
++
++interface FakeWindow {
++  id: string;
++  sessionId: string;
++  label: string;
++  blockIds: string[];
++  focusedBlock: string;
++}
++
++interface FakeSession {
++  id: string;
++  label: string;
++  windowIds: string[];
++  activeWindow: string;
++  revision: number;
++}
++
++interface FakeClient {
++  id: string;
++  kind: "app" | "cli";
++  sessionIds: string[];
++}
++
++interface FakeListener {
++  handlers: RexStreamHandlers;
++  ended: boolean;
++}
++
++function tail8(id: string): string {
++  return id.slice(-8);
++}
++
++function luaJson(value: JsonValue): string {
++  return JSON.stringify(value, (_key: string, inner: JsonValue) => (Array.isArray(inner) && inner.length === 0 ? {} : inner));
++}
++
++function validRexKey(token: string): boolean {
++  const parts = token.split("+");
++  const base = parts.at(-1) ?? "";
++  const mods = parts.slice(0, -1);
++  if (mods.some((mod) => mod !== "ctrl" && mod !== "alt" && mod !== "shift")) return false;
++  return NAMED.has(base) || UNSHIFTED.test(base);
++}
++
++export class FakeRex implements RexExec {
++  private sessions = new Map<string, FakeSession>();
++  private windows = new Map<string, FakeWindow>();
++  private blocks = new Map<string, FakeBlock>();
++  private clients: FakeClient[] = [];
++  private listeners = new Set<FakeListener>();
++  private recorded: MuxWrite[] = [];
++  private serial = 0x100;
++  private connected = true;
++  readonly calls: string[] = [];
++
++  constructor() {
++    this.seed();
++  }
++
++  private mint(kind: "session" | "window" | "block"): string {
++    this.serial += 1;
++    return `${kind}:01a19088-30a3-7261-abed-${this.serial.toString(16).padStart(12, "0")}`;
++  }
++
++  private seed(): void {
++    const a = this.addSession("probe-a");
++    const w1 = this.addWindow(a, "");
++    const claude = this.addBlock(w1, { foreground: { pid: FAKE_CLAUDE_PID, name: "claude", cwd: "/home/dev/app" }, title: "✳ Probe" });
++    claude.records = [
++      {
++        state: "idle",
++        app: "claude-code",
++        effective_app: "claude-code",
++        updated_at: "2026-10-31T14:57:40.09406+09:00",
++        owner: { pid: FAKE_CLAUDE_PID, name: "claude" },
++      },
++    ];
++    claude.rows.push("╭─ Claude ─╮", "❯ Try \"write a test\"", "  ⏸ manual mode on");
++    this.addBlock(w1, { foreground: { pid: 779, name: "fish", cwd: "/home/dev/app" }, title: "~/app" });
++    this.addBlock(w1, { creator: ONBOARDING_CREATOR, foreground: null });
++    w1.focusedBlock = claude.id;
++    const w2 = this.addWindow(a, "review");
++    this.addBlock(w2, { foreground: { pid: 8123, name: "codex", cwd: "/home/dev/app" }, title: "codex" });
++    a.activeWindow = w1.id;
++
++    const b = this.addSession("probe-b");
++    const w3 = this.addWindow(b, "");
++    this.addBlock(w3, { foreground: { pid: 901, name: "zsh", cwd: "/home/dev/work" }, title: "" });
++    this.addBlock(w3, { hostId: REMOTE_HOST_ID, foreground: { pid: 77, name: "zsh", cwd: "/srv" } });
++    b.activeWindow = w3.id;
++
++    this.clients = [
++      { id: "client:01a18fc6-7768-725d-b57e-58a007e15be3", kind: "app", sessionIds: [a.id] },
++      { id: "client:01a19088-30a2-755b-a5fa-ca0e54d755af", kind: "cli", sessionIds: [] },
++    ];
++  }
++
++  private addSession(label: string): FakeSession {
++    const session: FakeSession = { id: this.mint("session"), label, windowIds: [], activeWindow: "", revision: 1 };
++    this.sessions.set(session.id, session);
++    return session;
++  }
++
++  private addWindow(session: FakeSession, label: string): FakeWindow {
++    const id = this.mint("window");
++    const window: FakeWindow = { id, sessionId: session.id, label: label || `Window ${tail8(id)}`, blockIds: [], focusedBlock: "" };
++    this.windows.set(id, window);
++    session.windowIds.push(id);
++    session.revision += 1;
++    return window;
++  }
++
++  private addBlock(
++    window: FakeWindow,
++    init: { creator?: string; hostId?: string; foreground: FakeForeground | null; title?: string },
++  ): FakeBlock {
++    const block: FakeBlock = {
++      id: this.mint("block"),
++      windowId: window.id,
++      sessionId: window.sessionId,
++      creator: init.creator ?? TERMINAL_CREATOR,
++      hostId: init.hostId ?? FAKE_HOST_ID,
++      label: "shell",
++      foreground: init.foreground,
++      records: [],
++      title: init.title ?? "",
++      rows: Array.from({ length: 40 }, (_, index) => `history ${String(index + 1)}`),
++      lastExit: null,
++    };
++    this.blocks.set(block.id, block);
++    window.blockIds.push(block.id);
++    if (window.focusedBlock === "") window.focusedBlock = block.id;
++    return block;
++  }
++
++  writes(): readonly MuxWrite[] {
++    return this.recorded;
++  }
++
++  emit(event: JsonValue): void {
++    const line = JSON.stringify(event);
++    for (const listener of this.listeners) if (!listener.ended) listener.handlers.onLine(line);
++  }
++
++  private emitSession(sessionId: string, type: string, payload: JsonValue): void {
++    this.emit({ type: "session_event", payload: { session_id: sessionId, event: { type, payload } } });
++  }
++
++  private emitBlock(block: FakeBlock, name: string, payload: JsonValue): void {
++    this.emitSession(block.sessionId, "block_event", { block_id: block.id, creator_name: block.creator, name, payload });
++  }
++
++  private bump(session: FakeSession, announce: boolean): void {
++    session.revision += 1;
++    if (announce) this.emitSession(session.id, "session_view_changed", { revision: session.revision });
++  }
++
++  async run(args: readonly string[], stdin?: string): Promise<RexRunResult> {
++    await Promise.resolve();
++    this.calls.push(args.join(" "));
++    if (!this.connected) {
++      return { code: 4, stdout: "", stderr: `Error: no Rex server is running at ${FAKE_SOCKET}, and autostart is disabled\n` };
++    }
++    if (args[0] === "do" && args[1] === "-") {
++      const op = parseRexScript(stdin ?? "");
++      if (op === null) return { code: 1, stdout: "", stderr: "Error: stdin:1: attempt to index a non-table object(nil) with key 'op'\n" };
++      return { code: 0, stdout: `${luaJson(this.answer(op))}\n`, stderr: "" };
++    }
++    if (args[0] === "send-key") return this.sendKey(args);
++    if (args[0] === "window" && args[1] === "new") return this.newWindow(args);
++    return { code: 1, stdout: "", stderr: `Error: unknown command "${args[0] ?? ""}" for "rex"\n` };
++  }
++
++  private notFound(target: string) {
++    return { ok: false, error: `${target} not found (status=404 code=not_found)` };
++  }
++
++  private answer(op: RexOp) {
++    switch (op.op) {
++      case "snapshot":
++        return { ok: true, value: this.rawSnapshot() };
++      case "census":
++        return { ok: true, value: this.census() };
++      case "tail":
++        return this.tail(op.block, op.format, op.bytes);
++      case "process": {
++        const block = this.blocks.get(op.block);
++        if (block === undefined) return this.notFound(op.block);
++        return { ok: true, value: this.process(block) };
++      }
++      case "write": {
++        const block = this.blocks.get(op.block);
++        if (block === undefined) return this.notFound(op.block);
++        this.recorded.push({ paneId: block.id, kind: "text", payload: [op.text] });
++        block.rows.push(op.text);
++        return { ok: true, value: {} };
++      }
++      case "label_block": {
++        const block = this.blocks.get(op.block);
++        if (block === undefined) return this.notFound(op.block);
++        block.label = op.label || `Block ${tail8(block.id)}`;
++        const session = this.sessions.get(block.sessionId);
++        if (session) this.bump(session, true);
++        return { ok: true, value: {} };
++      }
++      case "label_window": {
++        const window = this.windows.get(op.window);
++        if (window === undefined) return this.notFound(op.window);
++        window.label = op.label || `Window ${tail8(window.id)}`;
++        this.emitSession(window.sessionId, "window_label_changed", { window_id: window.id, label: window.label });
++        return { ok: true, value: {} };
++      }
++      case "close_block": {
++        const block = this.blocks.get(op.block);
++        if (block === undefined) return this.notFound(op.block);
++        this.removeBlock(block);
++        return { ok: true, value: {} };
++      }
++      case "close_window": {
++        const window = this.windows.get(op.window);
++        if (window === undefined) return this.notFound(op.window);
++        for (const id of window.blockIds) {
++          const block = this.blocks.get(id);
++          if (block) this.removeBlock(block);
++        }
++        return { ok: true, value: {} };
++      }
++    }
++  }
++
++  private removeBlock(block: FakeBlock): void {
++    this.blocks.delete(block.id);
++    const window = this.windows.get(block.windowId);
++    const session = this.sessions.get(block.sessionId);
++    this.emitSession(block.sessionId, "block_closed", { block_id: block.id });
++    if (window === undefined || session === undefined) return;
++    window.blockIds = window.blockIds.filter((id) => id !== block.id);
++    if (window.focusedBlock === block.id) window.focusedBlock = window.blockIds[0] ?? "";
++    if (window.blockIds.length === 0) {
++      this.windows.delete(window.id);
++      session.windowIds = session.windowIds.filter((id) => id !== window.id);
++      if (session.activeWindow === window.id) session.activeWindow = session.windowIds[0] ?? "";
++      this.emitSession(session.id, "window_closed", { window_id: window.id });
++    }
++    this.bump(session, true);
++  }
++
++  private process(block: FakeBlock) {
++    return {
++      foreground: block.foreground === null ? null : { ...block.foreground, user: "dev", user_id: 1000 },
++      ancestors: [],
++      home: "/home/dev",
++      last_exit: block.lastExit ?? undefined,
++    };
++  }
++
++  private rawSnapshot() {
++    return {
++      host_id: FAKE_HOST_ID,
++      clients: this.appClients(),
++      sessions: [...this.sessions.values()].map((session) => {
++        const blocks = new Map<string, JsonValue>();
++        const windows = session.windowIds.flatMap((windowId) => {
++          const window = this.windows.get(windowId);
++          if (window === undefined) return [];
++          const views = window.blockIds.flatMap((blockId) => {
++            const block = this.blocks.get(blockId);
++            if (block === undefined) return [];
++            if (block.creator === TERMINAL_CREATOR) {
++              blocks.set(block.id, {
++                process: this.process(block),
++                title: { title: block.title },
++                program_status: { records: block.records.map((record) => ({ ...record })) },
++              });
++            }
++            return [{ block_id: block.id, creator_name: block.creator, host_id: block.hostId, label: block.label }];
++          });
++          return [{ window_id: window.id, label: window.label, focused_block_id: window.focusedBlock, layers: [{ blocks: views }] }];
++        });
++        return {
++          session_id: session.id,
++          label: session.label,
++          view: { session_id: session.id, label: session.label, active_window_id: session.activeWindow, revision: session.revision, windows },
++          blocks: Object.fromEntries(blocks),
++        };
++      }),
++    };
++  }
++
++  private appClients() {
++    return this.clients
++      .filter((client) => client.kind === "app")
++      .map((client) => ({ client_id: client.id, info: { kind: client.kind }, session_ids: [...client.sessionIds], connection_state: "connected" }));
++  }
++
++  private census() {
++    return {
++      clients: this.appClients(),
++      sessions: [...this.sessions.values()].map((session) => ({
++        session_id: session.id,
++        label: session.label,
++        revision: session.revision,
++        active: session.activeWindow,
++      })),
++    };
++  }
++
++  private tail(blockId: string, format: "vt" | "text", bytes: number) {
++    const block = this.blocks.get(blockId);
++    if (block === undefined) return this.notFound(blockId);
++    const rendered = block.rows
++      .map((row, index) => (format === "vt" ? `\u001b[0m${index % 2 === 0 ? "\u001b[2C" : ""}\u001b[1m${row}\u001b[0m` : `${index % 2 === 0 ? "  " : ""}${row}`))
++      .join("\r\n");
++    const full = Buffer.from(`${rendered}\r\n`, "utf8");
++    const start = full.length > bytes ? full.length - bytes : 0;
++    return { ok: true, value: { content: new TextDecoder().decode(full.subarray(start)), total: full.length, start, rows: 24 } };
++  }
++
++  private sendKey(args: readonly string[]): RexRunResult {
++    const blockAt = args.indexOf("-b");
++    const blockId = blockAt >= 0 ? (args[blockAt + 1] ?? "") : "";
++    const keys = args.slice(args.indexOf("--") + 1);
++    const block = this.blocks.get(blockId);
++    if (block === undefined) return { code: 3, stdout: "", stderr: `Error: block target "${blockId}" not found\n` };
++    const bad = keys.find((key) => !validRexKey(key));
++    if (bad !== undefined) return { code: 1, stdout: "", stderr: `Error: invalid key "${bad}": unknown key "${bad}"\n` };
++    this.recorded.push({ paneId: block.id, kind: "keys", payload: [...keys] });
++    return { code: 0, stdout: "", stderr: "" };
++  }
++
++  private newWindow(args: readonly string[]): RexRunResult {
++    const sessionId = args[args.indexOf("-s") + 1] ?? "";
++    const session = this.sessions.get(sessionId);
++    if (session === undefined) return { code: 3, stdout: "", stderr: `Error: session target "${sessionId}" not found\n` };
++    const cwdAt = args.indexOf("-c");
++    const cwd = cwdAt >= 0 ? (args[cwdAt + 1] ?? "/home/dev") : "/home/dev";
++    const window = this.addWindow(session, "");
++    const block = this.addBlock(window, { foreground: { pid: 4000 + this.serial, name: "zsh", cwd }, title: "" });
++    if (!args.includes("--focus=false")) session.activeWindow = window.id;
++    this.emitSession(session.id, "window_created", { window_id: window.id, label: window.label });
++    this.emitSession(session.id, "block_created", { block_id: block.id });
++    this.bump(session, true);
++    return { code: 0, stdout: `${JSON.stringify({ window_id: window.id, block_ids: [block.id], revision: session.revision })}\n`, stderr: "" };
++  }
++
++  events(handlers: RexStreamHandlers): RexStreamClient {
++    const listener: FakeListener = { handlers, ended: false };
++    if (!this.connected) {
++      queueMicrotask(() => handlers.onExit(`no Rex server is running at ${FAKE_SOCKET}, and autostart is disabled`));
++      return { kill: () => undefined };
++    }
++    this.listeners.add(listener);
++    return {
++      kill: () => {
++        if (listener.ended) return;
++        listener.ended = true;
++        this.listeners.delete(listener);
++        handlers.onExit("closed");
++      },
++    };
++  }
++
++  reportStatus(paneId: string, state: string, app = "claude-code"): void {
++    const block = this.blocks.get(paneId);
++    if (block === undefined) return;
++    const owner = { pid: block.foreground?.pid ?? 0, name: block.foreground?.name ?? "" };
++    const record = { state, app, effective_app: app, updated_at: new Date().toISOString(), owner };
++    block.records = [record];
++    this.emitBlock(block, "program_status_changed", { id: "", record, reason: "report" });
++  }
++
++  async reconnect(): Promise<void> {
++    this.connected = false;
++    await Promise.resolve();
++    this.connected = true;
++  }
++
++  async restartMux(): Promise<void> {
++    this.sessions = new Map([...this.sessions].map(([id, s]) => [id, { ...s, windowIds: [...s.windowIds] }]));
++    this.windows = new Map([...this.windows].map(([id, w]) => [id, { ...w, blockIds: [...w.blockIds] }]));
++    this.blocks = new Map([...this.blocks].map(([id, b]) => [id, { ...b, records: b.records.map((r) => ({ ...r, owner: { ...r.owner } })), rows: [...b.rows] }]));
++    for (const listener of this.listeners) {
++      listener.ended = true;
++      this.listeners.delete(listener);
++      listener.handlers.onExit("the rex event stream ended");
++    }
++    await Promise.resolve();
++  }
++
++  async renameOutOfBand(paneId: string, label: string): Promise<void> {
++    const block = this.blocks.get(paneId);
++    if (block === undefined) return;
++    block.label = label;
++    const session = this.sessions.get(block.sessionId);
++    if (session) this.bump(session, true);
++    await Promise.resolve();
++  }
++
++  async setProgramTitle(paneId: string, title: string): Promise<void> {
++    const block = this.blocks.get(paneId);
++    if (block === undefined) return;
++    block.title = title;
++    this.emitBlock(block, "title_changed", { title, owner: block.foreground ? { pid: block.foreground.pid, name: block.foreground.name } : null });
++    await Promise.resolve();
++  }
++
++  async changePane(paneId: string): Promise<void> {
++    const block = this.blocks.get(paneId);
++    if (block) block.rows.push(`paint ${String(block.rows.length)}`);
++    await Promise.resolve();
++  }
++
++  async endPane(paneId: string): Promise<void> {
++    const block = this.blocks.get(paneId);
++    if (block === undefined) return;
++    this.emitBlock(block, "child_exited", { exit_code: 0 });
++    this.removeBlock(block);
++    await Promise.resolve();
++  }
++
++  async focusOutOfBand(paneId: string): Promise<void> {
++    const block = this.blocks.get(paneId);
++    if (block === undefined) return;
++    const window = this.windows.get(block.windowId);
++    const session = this.sessions.get(block.sessionId);
++    if (window === undefined || session === undefined) return;
++    window.focusedBlock = block.id;
++    session.activeWindow = window.id;
++    for (const client of this.clients) {
++      if (client.kind === "app" && !client.sessionIds.includes(session.id)) client.sessionIds.push(session.id);
++    }
++    this.bump(session, false);
++    await Promise.resolve();
++  }
++
++  async pokeTopologyOutOfBand(): Promise<void> {
++    const window = [...this.windows.values()].find((w) => w.label === "review") ?? [...this.windows.values()][0];
++    if (window === undefined) return;
++    window.label = `${window.label}-silent`;
++    const session = this.sessions.get(window.sessionId);
++    if (session) this.bump(session, false);
++    await Promise.resolve();
++  }
++
++  pokeTopology(): void {
++    const session = [...this.sessions.values()][0];
++    if (session) this.bump(session, true);
++  }
++
++  pokePane(paneId: string): void {
++    const block = this.blocks.get(paneId);
++    if (block) this.emitBlock(block, "bell", {});
++  }
++
++  shutdown(): void {
++    for (const listener of this.listeners) {
++      listener.ended = true;
++      this.listeners.delete(listener);
++    }
++  }
++}
++
++export function fakeClaudeSessions(sessions: ReadonlyMap<number, string> = new Map([[FAKE_CLAUDE_PID, FAKE_CLAUDE_SESSION]])): RexSessionLookup {
++  return {
++    sessionFor(pid: number): Promise<AgentSessionRef | null> {
++      const value = sessions.get(pid);
++      return Promise.resolve(value === undefined ? null : { kind: "id", value });
++    },
++  };
++}
++
++export function rexWorld(fake: FakeRex): MuxConformanceWorld {
++  return {
++    adapter: new RexMux(fake, fakeClaudeSessions()),
++    writes: () => fake.writes(),
++    reconnect: () => fake.reconnect(),
++    restartMux: () => fake.restartMux(),
++    renameOutOfBand: (paneId, label) => fake.renameOutOfBand(paneId, label),
++    setProgramTitle: (paneId, title) => fake.setProgramTitle(paneId, title),
++    changePane: (paneId) => fake.changePane(paneId),
++    endPane: (paneId) => fake.endPane(paneId),
++    focusOutOfBand: (paneId) => fake.focusOutOfBand(paneId),
++    pokeTopologyOutOfBand: () => fake.pokeTopologyOutOfBand(),
++    pokeTopology: () => fake.pokeTopology(),
++    pokePane: (paneId) => fake.pokePane(paneId),
++    close: () => {
++      fake.shutdown();
++      return Promise.resolve();
++    },
++  };
++}
++
++export const rexConformanceFixture: MuxConformanceFixture = {
++  mux: "rex",
++  create(): Promise<MuxConformanceWorld> {
++    return Promise.resolve(rexWorld(new FakeRex()));
++  },
++};
+diff --git a/bridge/mux/rex/keys.test.ts b/bridge/mux/rex/keys.test.ts
+new file mode 100644
+index 00000000..35e86e72
+--- /dev/null
++++ b/bridge/mux/rex/keys.test.ts
+@@ -0,0 +1,36 @@
++import { describe, expect, test } from "bun:test";
++
++import { MUX_NAMED_KEYS } from "../keys.ts";
++import { toRexKey } from "./keys.ts";
++
++describe("toRexKey", () => {
++  test("every named key in the contract's alphabet has a Rex name", () => {
++    for (const key of MUX_NAMED_KEYS) expect(toRexKey(key).ok).toBe(true);
++    expect(toRexKey("PageDown")).toEqual({ ok: true, key: "pagedown" });
++  });
++
++  test("modifiers keep the canonical order", () => {
++    expect(toRexKey("ctrl+c")).toEqual({ ok: true, key: "ctrl+c" });
++    expect(toRexKey("ctrl+alt+Delete")).toEqual({ ok: true, key: "ctrl+alt+delete" });
++    expect(toRexKey("shift+Tab")).toEqual({ ok: true, key: "shift+tab" });
++  });
++
++  test("a capital letter is shift and its key, because a bare A arrives as a", () => {
++    expect(toRexKey("A")).toEqual({ ok: true, key: "shift+a" });
++    expect(toRexKey("alt+F")).toEqual({ ok: true, key: "alt+shift+f" });
++  });
++
++  test("shifted punctuation goes through its US-layout key, which send-key accepts", () => {
++    expect(toRexKey("?")).toEqual({ ok: true, key: "shift+/" });
++    expect(toRexKey("~")).toEqual({ ok: true, key: "shift+`" });
++    expect(toRexKey("+")).toEqual({ ok: true, key: "shift+=" });
++    expect(toRexKey("/")).toEqual({ ok: true, key: "/" });
++    expect(toRexKey(" ")).toEqual({ ok: true, key: "space" });
++  });
++
++  test("meta and characters with no US key are refused before anything is sent", () => {
++    expect(toRexKey("meta+c")).toEqual({ ok: false, reason: "meta" });
++    expect(toRexKey("한")).toEqual({ ok: false, reason: "character" });
++    expect(toRexKey("ctrl+")).toEqual({ ok: false, reason: "unparsed" });
++  });
++});
+diff --git a/bridge/mux/rex/layout.test.ts b/bridge/mux/rex/layout.test.ts
+new file mode 100644
+index 00000000..6a94eb55
+--- /dev/null
++++ b/bridge/mux/rex/layout.test.ts
+@@ -0,0 +1,188 @@
++import { describe, expect, test } from "bun:test";
++
++import type { AgentSessionRef } from "../../journal/types.ts";
++import type { JsonValue } from "../../json.ts";
++import {
++  isDefaultBlockLabel,
++  isDefaultWindowLabel,
++  normalizeGrid,
++  paneAgent,
++  reportedRecord,
++  sessionPid,
++  sessionPids,
++  toSnapshot,
++} from "./layout.ts";
++import { decodeSnapshot, type RexBlockInfo, type RexStatusRecord } from "./protocol.ts";
++
++const HOST = "host-a";
++const S1 = "session:01a19088-30a3-7261-abed-000000000001";
++const S2 = "session:01a19088-30a3-7261-abed-000000000002";
++const W1 = "window:01a19088-30a3-7261-abed-0000000000a1";
++const W2 = "window:01a19088-30a3-7261-abed-0000000000a2";
++const B1 = "block:01a19088-30a3-7261-abed-0000000000b1";
++const B2 = "block:01a19088-30a3-7261-abed-0000000000b2";
++const B3 = "block:01a19088-30a3-7261-abed-0000000000b3";
++const TERMINAL = "com.superlogical.terminal";
++
++function wireRecord(state: string, app = "claude-code", pid = 41) {
++  return { state, app, effective_app: app, updated_at: "2026-10-31T00:00:00Z", owner: { pid, name: "claude" } };
++}
++
++function record(state: string, id = "", updatedAt = "2026-10-31T00:00:00Z", app = "claude-code", ownerPid = 0): RexStatusRecord {
++  return { id, state, app, updatedAt, ownerPid };
++}
++
++function info(name: string, records: readonly RexStatusRecord[] = []): RexBlockInfo {
++  return { process: { foreground: { pid: 1, name, argv0: name, script: "", cwd: "/w" }, ancestors: [], exited: false }, title: "", records };
++}
++
++function world(clients: JsonValue) {
++  return decodeSnapshot({
++    host_id: HOST,
++    clients,
++    sessions: [
++      {
++        session_id: S1,
++        label: "one",
++        view: {
++          session_id: S1,
++          label: "one",
++          active_window_id: W1,
++          windows: [
++            {
++              window_id: W1,
++              label: `Window ${W1.slice(-8)}`,
++              focused_block_id: B1,
++              layers: [
++                {
++                  blocks: [
++                    { block_id: B1, creator_name: TERMINAL, host_id: HOST, label: "shell" },
++                    { block_id: B2, creator_name: TERMINAL, host_id: HOST, label: "mine" },
++                    { block_id: "block:x-onboarding", creator_name: "com.superlogical.onboarding", host_id: HOST },
++                    { block_id: "block:x-remote", creator_name: TERMINAL, host_id: "elsewhere" },
++                  ],
++                },
++              ],
++            },
++          ],
++        },
++        blocks: {
++          [B1]: { process: { foreground: { pid: 1, name: "claude", cwd: "/w" }, ancestors: {} }, program_status: { records: [wireRecord("working")] } },
++          [B2]: { process: { foreground: { pid: 2, name: "zsh", cwd: "/w" } }, program_status: { records: {} }, title: { title: "~/w" } },
++          "block:x-remote": { process: { foreground: { pid: 3, name: "claude", cwd: "/srv" } }, program_status: { records: [wireRecord("idle", "claude-code", 3)] } },
++        },
++      },
++      {
++        session_id: S2,
++        label: "two",
++        view: {
++          session_id: S2,
++          label: "two",
++          active_window_id: W2,
++          windows: [{ window_id: W2, label: "docs", focused_block_id: B3, layers: [{ blocks: [{ block_id: B3, creator_name: TERMINAL, host_id: HOST }] }] }],
++        },
++        blocks: { [B3]: { process: { foreground: null, last_exit: { exit_code: 0 } }, title: { title: "me@mac:~/w" } } },
++      },
++    ],
++  });
++}
++
++describe("agent and status", () => {
++  test("the root record wins, else the newest child", () => {
++    const child = record("working", "build", "2026-10-31T00:00:09Z");
++    const older = record("idle", "lint", "2026-10-31T00:00:01Z");
++    expect(reportedRecord([older, child])?.id).toBe("build");
++    expect(reportedRecord([child, record("blocked")])?.state).toBe("blocked");
++  });
++
++  test("a program that names an app Collie has no harness for is a shell, even running claude", () => {
++    expect(paneAgent(info("claude", [record("working", "", "2026-10-31T00:00:00Z", "cargo")]))).toEqual({ agent: "shell", status: "unknown" });
++  });
++
++  test("with no report, an exact foreground name is a provisional agent with no status", () => {
++    expect(paneAgent(info("codex"))).toEqual({ agent: "codex", status: "unknown" });
++    expect(paneAgent(info("codex-wrapper"))).toEqual({ agent: "shell", status: "unknown" });
++  });
++});
++
++describe("session pids", () => {
++  test("a Claude pane's pid is the one that reported its status, else its foreground process", () => {
++    expect(sessionPid(info("claude", [record("idle", "", "2026-10-31T00:00:00Z", "claude-code", 41)]))).toBe(41);
++    expect(sessionPid(info("claude"))).toBe(1);
++  });
++
++  test("only a Claude pane has a session pid", () => {
++    expect(sessionPid(info("codex"))).toBeNull();
++    expect(sessionPid(info("zsh"))).toBeNull();
++    expect(sessionPid(undefined)).toBeNull();
++  });
++
++  test("blocks of another host or creator are never looked up", () => {
++    expect([...sessionPids(world({}))]).toEqual([[B1, 41]]);
++  });
++});
++
++describe("labels", () => {
++  test("defaults made from the id are no one's name", () => {
++    expect(isDefaultWindowLabel(W1, `Window ${W1.slice(-8)}`)).toBe(true);
++    expect(isDefaultWindowLabel(W1, "Window 12345678")).toBe(false);
++    expect(isDefaultBlockLabel(B1, "shell")).toBe(true);
++    expect(isDefaultBlockLabel(B1, `Block ${B1.slice(-8)}`)).toBe(true);
++    expect(isDefaultBlockLabel(B1, "mine")).toBe(false);
++  });
++});
++
++describe("toSnapshot", () => {
++  test("a session ref lands on the pane it was looked up for, and nowhere else", () => {
++    const ref: AgentSessionRef = { kind: "id", value: "5f1d1c0e-8a3b-4c2d-9e7f-0a1b2c3d4e5f" };
++    const snapshot = toSnapshot(world({}), new Map([[B1, ref]]));
++    expect(snapshot.panes.find((pane) => pane.paneId === B1)?.agentSession).toEqual(ref);
++    expect(snapshot.panes.find((pane) => pane.paneId === B2)?.agentSession).toBeUndefined();
++    expect(toSnapshot(world({})).panes.every((pane) => pane.agentSession === undefined)).toBe(true);
++  });
++
++  test("drops other creators and other hosts, and counts what it publishes", () => {
++    const snapshot = toSnapshot(world({}));
++    expect(snapshot.panes.map((pane) => pane.paneId)).toEqual([B1, B2, B3]);
++    expect(snapshot.spaces[0]?.paneCount).toBe(2);
++    expect(snapshot.tabs[0]?.paneCount).toBe(2);
++  });
++
++  test("an app attached to exactly one session focuses its active window's focused block", () => {
++    const snapshot = toSnapshot(world([{ client_id: "client:a", info: { kind: "app" }, session_ids: [S1], connection_state: "connected" }]));
++    expect(snapshot.panes.filter((pane) => pane.focused).map((pane) => pane.paneId)).toEqual([B1]);
++    expect(snapshot.spaces.map((space) => space.focused)).toEqual([true, false]);
++  });
++
++  test("an app attached to several sessions says nothing about which it shows", () => {
++    const snapshot = toSnapshot(world([{ client_id: "client:a", info: { kind: "app" }, session_ids: [S1, S2] }]));
++    expect(snapshot.panes.some((pane) => pane.focused)).toBe(false);
++  });
++
++  test("CLI clients and lost apps never focus anything", () => {
++    const snapshot = toSnapshot(world([
++      { client_id: "client:c", info: { kind: "cli" }, session_ids: [S1] },
++      { client_id: "client:a", info: { kind: "app" }, session_ids: [S1], connection_state: "lost" },
++    ]));
++    expect(snapshot.panes.some((pane) => pane.focused)).toBe(false);
++  });
++
++  test("a block whose program exited is not alive, and an operator's label is its paneLabel", () => {
++    const snapshot = toSnapshot(world({}));
++    expect(snapshot.panes.find((pane) => pane.paneId === B3)?.alive).toBe(false);
++    expect(snapshot.panes.find((pane) => pane.paneId === B2)).toMatchObject({ paneLabel: "mine", terminalTitle: "~/w", foregroundCommand: "zsh" });
++    expect(snapshot.panes.find((pane) => pane.paneId === B1)?.paneLabel).toBeUndefined();
++    expect(snapshot.panes.find((pane) => pane.paneId === B1)).toMatchObject({ agent: "claude", status: "working" });
++  });
++
++  test("a title that only restates the shell's user, host and folder is no title", () => {
++    expect(toSnapshot(world({})).panes.find((pane) => pane.paneId === B3)?.terminalTitle).toBeUndefined();
++  });
++});
++
++describe("normalizeGrid", () => {
++  test("keeps SGR, expands ESC[nC, and drops every other escape", () => {
++    const raw = "\u001b[0m\u001b[1mhi\u001b[3Cthere\u001b[0m\r\n\u001b[?25l\u001b[2J\u001b]8;;http://x\u0007link\u001b]8;;\u0007\u001b[C!\r\n";
++    expect(normalizeGrid(raw)).toBe("\u001b[0m\u001b[1mhi   there\u001b[0m\nlink !\n");
++  });
++});
+diff --git a/bridge/mux/rex/protocol.test.ts b/bridge/mux/rex/protocol.test.ts
+new file mode 100644
+index 00000000..92824445
+--- /dev/null
++++ b/bridge/mux/rex/protocol.test.ts
+@@ -0,0 +1,100 @@
++import { describe, expect, test } from "bun:test";
++
++import {
++  decodeCensus,
++  decodeCreatedWindow,
++  decodeProcess,
++  decodeSnapshot,
++  errorCode,
++  parseAnswer,
++  parseEvent,
++  REX_PROGRAM,
++  rexScript,
++} from "./protocol.ts";
++import { parseRexScript } from "./fixture.ts";
++
++describe("rexScript", () => {
++  test("carries its arguments through any text, closing brackets included", () => {
++    const text = "close ]] and ]=] and ]==] here\n\"quoted\"";
++    const script = rexScript({ op: "write", block: "block:x", text, paste: true });
++    expect(parseRexScript(script)).toEqual({ op: "write", block: "block:x", text, paste: true });
++  });
++
++  test("a script whose program was changed is not one of ours", () => {
++    const script = rexScript({ op: "snapshot" });
++    expect(parseRexScript(script)).toEqual({ op: "snapshot" });
++    expect(parseRexScript(script.replace("print(", "io.write("))).toBeNull();
++    expect(script.endsWith(REX_PROGRAM)).toBe(true);
++  });
++});
++
++describe("answers", () => {
++  test("the last line is the program's", () => {
++    expect(parseAnswer('noise\n{"ok":true,"value":{"a":1}}\n')).toEqual({ ok: true, value: { a: 1 } });
++    expect(parseAnswer('{"ok":false,"error":"x (status=409 code=conflict)"}')).toEqual({ ok: false, error: "x (status=409 code=conflict)" });
++    expect(parseAnswer("Error: stdin:1: boom")).toBeNull();
++  });
++
++  test("Rex's error code is read out of its error text", () => {
++    expect(errorCode('stream response "control-1" failed: block not found: block:x (status=404 code=not_found)')).toBe("not_found");
++    expect(errorCode("no code here")).toBeNull();
++  });
++});
++
++describe("decoders", () => {
++  test("Lua's empty table reads as an empty list wherever a list is expected", () => {
++    const snapshot = decodeSnapshot({ host_id: "h", clients: {}, sessions: {} });
++    expect(snapshot).toEqual({ hostId: "h", clients: [], sessions: [] });
++    expect(decodeCensus({ clients: {}, sessions: {} })).toEqual({ clients: [], sessions: [] });
++  });
++
++  test("a session whose view failed to read is left out rather than shown empty", () => {
++    const snapshot = decodeSnapshot({ host_id: "h", sessions: [{ session_id: "session:a", label: "a", error: "gone (status=404 code=session_not_found)", blocks: {} }] });
++    expect(snapshot.sessions).toEqual([]);
++  });
++
++  test("a program that exited is marked, and one still running is not", () => {
++    expect(decodeProcess({ foreground: null, last_exit: { exit_code: 1 } })?.exited).toBe(true);
++    expect(decodeProcess({ foreground: { pid: 3, name: "fish", cwd: "/" } })).toMatchObject({ exited: false, foreground: { pid: 3, name: "fish" } });
++  });
++
++  test("a new window names its window and blocks, or is null", () => {
++    expect(decodeCreatedWindow('{"window_id":"window:w","block_ids":["block:b"],"revision":2}\n')).toEqual({ windowId: "window:w", blockIds: ["block:b"] });
++    expect(decodeCreatedWindow("Error: nope")).toBeNull();
++  });
++});
++
++describe("parseEvent", () => {
++  test("unwraps a status report to its block, name and record", () => {
++    const line = JSON.stringify({
++      type: "session_event",
++      payload: {
++        session_id: "session:s",
++        event: {
++          type: "block_event",
++          payload: { block_id: "block:b", creator_name: "com.superlogical.terminal", name: "program_status_changed", payload: { id: "", record: { state: "blocked", app: "claude-code" } } },
++        },
++      },
++    });
++    expect(parseEvent(line)).toMatchObject({
++      type: "session_event",
++      session: "session:s",
++      sessionEvent: "block_event",
++      block: "block:b",
++      blockEvent: "program_status_changed",
++      record: { app: "claude-code", state: "blocked" },
++    });
++  });
++
++  test("a client event carries the client's id and kind", () => {
++    const joined = JSON.stringify({ type: "client_joined", payload: { client: { client_id: "client:c", info: { kind: "app" } } } });
++    const left = JSON.stringify({ type: "client_left", payload: { client_id: "client:c" } });
++    expect(parseEvent(joined)).toMatchObject({ clientId: "client:c", clientKind: "app" });
++    expect(parseEvent(left)).toMatchObject({ clientId: "client:c", clientKind: "" });
++  });
++
++  test("a line that is not an event is null", () => {
++    expect(parseEvent("Error: interrupted")).toBeNull();
++    expect(parseEvent('{"payload":{}}')).toBeNull();
++  });
++});
+diff --git a/bridge/mux/rex/watch.test.ts b/bridge/mux/rex/watch.test.ts
+new file mode 100644
+index 00000000..49782e5b
+--- /dev/null
++++ b/bridge/mux/rex/watch.test.ts
+@@ -0,0 +1,234 @@
++import { describe, expect, test } from "bun:test";
++import { readFileSync } from "node:fs";
++import { join } from "node:path";
++
++import type { JsonValue } from "../../json.ts";
++import type { MuxWatchOptions } from "../types.ts";
++import type { RexExec, RexRunResult, RexStreamHandlers } from "./exec.ts";
++import { FakeRex } from "./fixture.ts";
++import { parseEvent } from "./protocol.ts";
++import { RESYNC_IDLE_MS, RESYNC_MS, RexWatch, type WatchClock, type WatchTimer } from "./watch.ts";
++
++class ManualClock implements WatchClock {
++  tick: (() => void) | null = null;
++  cleared = false;
++  setInterval(fn: () => void): WatchTimer {
++    this.tick = fn;
++    return setTimeout(() => undefined, 0);
++  }
++  clearInterval(): void {
++    this.cleared = true;
++  }
++}
++
++interface Recorder {
++  readonly options: MuxWatchOptions;
++  readonly log: string[];
++}
++
++function recorder(panes: string[] = []): Recorder {
++  const log: string[] = [];
++  return {
++    log,
++    options: {
++      panes,
++      onTopologyChange: () => log.push("topology"),
++      onPaneChange: (id) => log.push(`pane:${id}`),
++      onUp: () => log.push("up"),
++      onDown: (reason) => log.push(`down:${reason}`),
++    },
++  };
++}
++
++const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
++
++function blockEvent(block: string, name: string, payload: JsonValue): string {
++  return JSON.stringify({
++    type: "session_event",
++    payload: { session_id: "session:s", event: { type: "block_event", payload: { block_id: block, creator_name: "com.superlogical.terminal", name, payload } } },
++  });
++}
++
++class StreamHolder {
++  handlers: RexStreamHandlers | null = null;
++}
++
++interface Scripted {
++  readonly exec: RexExec;
++  readonly stream: StreamHolder;
++}
++
++function scripted(census: RexRunResult): Scripted {
++  const stream = new StreamHolder();
++  return {
++    stream,
++    exec: {
++      run: () => Promise.resolve(census),
++      events: (handlers) => {
++        stream.handlers = handlers;
++        return { kill: () => handlers.onExit("closed") };
++      },
++    },
++  };
++}
++
++const CENSUS_OK: RexRunResult = { code: 0, stdout: '{"ok":true,"value":{"clients":{},"sessions":[{"session_id":"session:s","label":"a","revision":1}]}}\n', stderr: "" };
++
++describe("RexWatch", () => {
++  test("is up only after the first census answers, and down exactly once", async () => {
++    const { exec, stream } = scripted(CENSUS_OK);
++    const rec = recorder();
++    const clock = new ManualClock();
++    const watch = new RexWatch(exec, rec.options, clock);
++    expect(rec.log).toEqual([]);
++    await flush();
++    expect(rec.log).toEqual(["up"]);
++    stream.handlers?.onExit("the rex event stream ended");
++    stream.handlers?.onExit("again");
++    expect(rec.log).toEqual(["up", "down:the rex event stream ended"]);
++    expect(clock.cleared).toBe(true);
++    watch.close();
++  });
++
++  test("a server that is not running ends the watch before it is up", async () => {
++    const { exec } = scripted({ code: 4, stdout: "", stderr: "Error: no Rex server is running at /x, and autostart is disabled" });
++    const rec = recorder();
++    const watch = new RexWatch(exec, rec.options, new ManualClock());
++    await flush();
++    expect(rec.log).toEqual(["down:Error: no Rex server is running at /x, and autostart is disabled"]);
++    watch.close();
++  });
++
++  test("a status report that changes only its timestamp or message moves nothing", async () => {
++    const { exec, stream } = scripted(CENSUS_OK);
++    const rec = recorder(["block:b"]);
++    const watch = new RexWatch(exec, rec.options, new ManualClock());
++    await flush();
++    const report = (state: string, msg: string) => blockEvent("block:b", "program_status_changed", { id: "", reason: "report", record: { state, app: "claude-code", msg, updated_at: msg } });
++    stream.handlers?.onLine(report("working", "one"));
++    stream.handlers?.onLine(report("working", "two"));
++    stream.handlers?.onLine(report("blocked", "three"));
++    expect(rec.log).toEqual(["up", "topology", "pane:block:b", "topology", "pane:block:b"]);
++    watch.close();
++  });
++
++  test("a bell reaches only a watched pane, and never the topology", async () => {
++    const { exec, stream } = scripted(CENSUS_OK);
++    const rec = recorder(["block:w"]);
++    const watch = new RexWatch(exec, rec.options, new ManualClock());
++    await flush();
++    stream.handlers?.onLine(blockEvent("block:w", "bell", {}));
++    stream.handlers?.onLine(blockEvent("block:other", "bell", {}));
++    expect(rec.log).toEqual(["up", "pane:block:w"]);
++    watch.close();
++  });
++
++  test("a client connecting moves the topology only when it is an app", async () => {
++    const { exec, stream } = scripted(CENSUS_OK);
++    const rec = recorder();
++    const watch = new RexWatch(exec, rec.options, new ManualClock());
++    await flush();
++    stream.handlers?.onLine(JSON.stringify({ type: "client_joined", payload: { client: { client_id: "client:cli", info: { kind: "cli" } } } }));
++    stream.handlers?.onLine(JSON.stringify({ type: "client_left", payload: { client_id: "client:cli" } }));
++    expect(rec.log).toEqual(["up"]);
++    stream.handlers?.onLine(JSON.stringify({ type: "client_joined", payload: { client: { client_id: "client:app", info: { kind: "app" } } } }));
++    stream.handlers?.onLine(JSON.stringify({ type: "client_left", payload: { client_id: "client:app" } }));
++    expect(rec.log).toEqual(["up", "topology", "topology"]);
++    watch.close();
++  });
++
++  test("a census that sees a change nobody announced moves the topology", async () => {
++    const fake = new FakeRex();
++    const rec = recorder();
++    const clock = new ManualClock();
++    const watch = new RexWatch(fake, { ...rec.options, attention: () => "watched" }, clock);
++    await flush();
++    await fake.pokeTopologyOutOfBand();
++    clock.tick?.();
++    await flush();
++    expect(rec.log).toEqual(["up", "topology"]);
++    watch.close();
++  });
++
++  test("nobody watching runs the census once a minute, and attention brings the 5 s census back", async () => {
++    let runs = 0;
++    let attention: "watched" | "idle" = "idle";
++    const { stream } = scripted(CENSUS_OK);
++    const exec: RexExec = {
++      run: () => {
++        runs++;
++        return Promise.resolve(CENSUS_OK);
++      },
++      events: (handlers) => {
++        stream.handlers = handlers;
++        return { kill: () => handlers.onExit("closed") };
++      },
++    };
++    const clock = new ManualClock();
++    const watch = new RexWatch(exec, { ...recorder().options, attention: () => attention }, clock);
++    await flush();
++    expect(runs).toBe(1);
++    const idleTicks = RESYNC_IDLE_MS / RESYNC_MS;
++    for (let i = 1; i < idleTicks; i++) clock.tick?.();
++    await flush();
++    expect(runs).toBe(1);
++    clock.tick?.();
++    await flush();
++    expect(runs).toBe(2);
++    attention = "watched";
++    clock.tick?.();
++    await flush();
++    clock.tick?.();
++    await flush();
++    expect(runs).toBe(4);
++    watch.close();
++  });
++
++  test("a census killed at its deadline keeps a live stream up", async () => {
++    let census: RexRunResult = CENSUS_OK;
++    const { stream } = scripted(CENSUS_OK);
++    const exec: RexExec = {
++      run: () => Promise.resolve(census),
++      events: (handlers) => {
++        stream.handlers = handlers;
++        return { kill: () => handlers.onExit("closed") };
++      },
++    };
++    const rec = recorder();
++    const clock = new ManualClock();
++    const watch = new RexWatch(exec, { ...rec.options, attention: () => "watched" }, clock);
++    await flush();
++    census = { code: 143, stdout: "", stderr: "" };
++    clock.tick?.();
++    await flush();
++    expect(rec.log).toEqual(["up"]);
++    census = { code: 4, stdout: "", stderr: "Error: no Rex server is running at /x" };
++    clock.tick?.();
++    await flush();
++    expect(rec.log).toEqual(["up", "down:Error: no Rex server is running at /x"]);
++    watch.close();
++  });
++
++  test("recorded structural and status lines move the watch, CLI connections do not", () => {
++    const events = readFileSync(join(import.meta.dir, "captures", "events.ndjson"), "utf8").split("\n").filter((line) => line.trim() !== "");
++    const { exec, stream } = scripted({ code: 4, stdout: "", stderr: "no Rex server is running" });
++    const rec = recorder();
++    const watch = new RexWatch(exec, rec.options, new ManualClock());
++    const kinds = new Map<string, number>();
++    for (const line of events) {
++      const before = rec.log.length;
++      stream.handlers?.onLine(line);
++      const event = parseEvent(line);
++      const kind = [event?.type, event?.sessionEvent, event?.blockEvent].filter(Boolean).join("/");
++      kinds.set(kind, (kinds.get(kind) ?? 0) + rec.log.length - before);
++    }
++    watch.close();
++    expect(kinds.get("client_joined")).toBe(0);
++    expect(kinds.get("session_event/client_connected")).toBe(0);
++    expect(kinds.get("session_event/block_owner_changed")).toBe(0);
++    expect(kinds.get("session_created")).toBe(1);
++    expect(kinds.get("session_event/window_created")).toBe(1);
++    expect(kinds.get("session_event/block_event/program_status_changed")).toBe(4);
++    expect(kinds.get("session_event/block_event/program_status_removed")).toBe(1);
++  });
++});
+diff --git a/bridge/server.test.ts b/bridge/server.test.ts
+index 8d1bc105..11c13e47 100644
+--- a/bridge/server.test.ts
++++ b/bridge/server.test.ts
+@@ -203,6 +203,7 @@ function cfg(overrides: Partial<Config> = {}): Config {
+     tmuxBin: "",
+     zellijBin: "",
+     ternBin: "",
++    rexBin: "",
+     socketPath: "/tmp/herdr.sock",
+     port: 8787,
+     host: "127.0.0.1",
+diff --git a/bridge/solo-baseline.test.ts b/bridge/solo-baseline.test.ts
+index 3a79edf4..1e28ec4b 100644
+--- a/bridge/solo-baseline.test.ts
++++ b/bridge/solo-baseline.test.ts
+@@ -991,6 +991,7 @@ const CONFIG_KEYS = {
+   tmuxBin: true,
+   zellijBin: true,
+   ternBin: true,
++  rexBin: true,
+   socketPath: true,
+   dialMode: true,
+   auditContent: true,
+@@ -1080,6 +1081,7 @@ describe("solo zero-tax — config", () => {
+       "quickRepliesFile",
+       "readLines",
+       "redact",
++      "rexBin",
+       "sendProtocol",
+       "sent",
+       "skipServe",
+@@ -1173,6 +1175,7 @@ describe("solo zero-tax — config", () => {
+       "COLLIE_PUBLIC_HOSTS",
+       "COLLIE_READ_LINES",
+       "COLLIE_REDACT",
++      "COLLIE_REX_BIN",
+       "COLLIE_SEND_PROTOCOL",
+       "COLLIE_SENT",
+       "COLLIE_SKIP_SERVE",
+diff --git a/bridge/state-engine-unwatched.test.ts b/bridge/state-engine-unwatched.test.ts
+new file mode 100644
+index 00000000..23d45e97
+--- /dev/null
++++ b/bridge/state-engine-unwatched.test.ts
+@@ -0,0 +1,123 @@
++import { describe, expect, test } from "bun:test";
++
++import { ATTENTION_WINDOW_MS, StateEngine, UNWATCHED_POLL_MS } from "./state-engine.ts";
++import { muxOk, muxUnreachable } from "./mux/types.ts";
++import type { MuxAdapter, MuxPane } from "./mux/types.ts";
++import type { AgentStatus } from "./types.ts";
++
++const RELAXED = 12_000;
++const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
++
++function claudePane(paneId: string, status: AgentStatus): MuxPane {
++  return { paneId, spaceId: "$0", spaceLabel: "s", spaceNumber: 1, tabId: "@0", cwd: "/w", focused: false, alive: true, agent: "claude", status };
++}
++
++function harness(opts: { unwatched?: boolean } = {}) {
++  const reads: string[] = [];
++  const fake = { panes: [claudePane("%1", "working"), claudePane("%2", "working")], reads, up: true };
++  const stub: Partial<MuxAdapter> = {
++    reachable: () => Promise.resolve(fake.up),
++    snapshot: () => (fake.up ? Promise.resolve({ panes: fake.panes, spaces: [], tabs: [] }) : Promise.reject(muxUnreachable("down"))),
++    readGrid: (paneId: string) => {
++      fake.reads.push(paneId);
++      return Promise.resolve(muxOk({ paneId, text: "", truncated: false, revision: 0 }));
++    },
++  };
++  // SAFETY: a poll reaches only `reachable`, `snapshot` and `readGrid`, all present on the stub.
++  const engine = new StateEngine(stub as MuxAdapter, 1500, opts.unwatched === false ? {} : { unwatchedPollMs: UNWATCHED_POLL_MS });
++  engine["started"] = true;
++  const poll = () => engine["poll"]();
++  const cadence = () => engine["cadenceMs"];
++  const lookAway = () => engine.noteAttention(Date.now() - ATTENTION_WINDOW_MS - 1);
++  return { fake, engine, poll, cadence, lookAway };
++}
++
++describe("StateEngine: nobody watching", () => {
++  test("a connected engine nobody reads polls at the unwatched cadence, and a read brings the relaxed one back at once", async () => {
++    const { engine, poll, cadence } = harness();
++    await poll();
++    engine.setCadence(RELAXED);
++    expect(cadence()).toBe(UNWATCHED_POLL_MS);
++    let poked = 0;
++    engine["poll"] = () => {
++      poked++;
++      return Promise.resolve();
++    };
++    engine.noteAttention();
++    expect(cadence()).toBe(RELAXED);
++    expect(poked).toBe(1);
++    engine.noteAttention();
++    expect(poked).toBe(1);
++    engine.stop();
++  });
++
++  test("an event stream that drops while nobody reads stays at the unwatched cadence", async () => {
++    const { engine, poll, cadence } = harness();
++    await poll();
++    engine.setCadence(1500);
++    expect(cadence()).toBe(UNWATCHED_POLL_MS);
++    engine.stop();
++  });
++
++  test("an engine that has never connected keeps the fast retry even when nobody reads", async () => {
++    const { fake, engine, poll, cadence } = harness();
++    fake.up = false;
++    await poll();
++    expect(cadence()).toBe(1500);
++    engine.stop();
++  });
++
++  test("a poll that fails after the engine connected retries at the unwatched cadence while nobody reads", async () => {
++    const { fake, engine, poll, cadence } = harness();
++    await poll();
++    fake.up = false;
++    await poll();
++    expect(engine.current().bridge).not.toBe("connected");
++    expect(cadence()).toBe(UNWATCHED_POLL_MS);
++    engine.noteAttention();
++    await settle();
++    expect(cadence()).toBe(1500);
++    engine.stop();
++  });
++
++  test("attention lapsing relaxes the engine on its next poll", async () => {
++    const { engine, poll, cadence, lookAway } = harness();
++    await poll();
++    engine.noteAttention();
++    await settle();
++    engine.setCadence(RELAXED);
++    expect(cadence()).toBe(RELAXED);
++    lookAway();
++    await poll();
++    expect(cadence()).toBe(UNWATCHED_POLL_MS);
++    engine.stop();
++  });
++
++  test("nobody reading, only a pane whose status moved has its screen read", async () => {
++    const { fake, engine, poll } = harness();
++    await poll();
++    expect(fake.reads.toSorted()).toEqual(["%1", "%2"]);
++    fake.reads.length = 0;
++    await poll();
++    expect(fake.reads).toEqual([]);
++    fake.panes = [claudePane("%1", "blocked"), claudePane("%2", "working")];
++    await poll();
++    expect(fake.reads).toEqual(["%1"]);
++    fake.reads.length = 0;
++    engine.noteAttention();
++    await settle();
++    expect(fake.reads.toSorted()).toEqual(["%1", "%2"]);
++    engine.stop();
++  });
++
++  test("an engine built without an unwatched cadence ignores attention, as before", async () => {
++    const { fake, engine, poll, cadence } = harness({ unwatched: false });
++    await poll();
++    engine.setCadence(RELAXED);
++    expect(cadence()).toBe(RELAXED);
++    fake.reads.length = 0;
++    await poll();
++    expect(fake.reads.toSorted()).toEqual(["%1", "%2"]);
++    engine.stop();
++  });
++});
+diff --git a/bridge/surface/shadow.test.ts b/bridge/surface/shadow.test.ts
+index 48344d65..d829fe04 100644
+--- a/bridge/surface/shadow.test.ts
++++ b/bridge/surface/shadow.test.ts
+@@ -89,6 +89,17 @@ describe("surface shadow", () => {
+     expect(counters).toEqual({ observed: 1, free: 1, unknown: {}, modal: {}, disagreements: 0 });
+   });
+ 
++  test("a pane left out by shouldRead is not read and keeps the Surface of its last read", async () => {
++    const r = rig();
++    r.mux.set("w1:p1", IDLE, 7);
++    r.mux.set("w1:p2", IDLE, 7);
++    await r.shadow.observe([agent("w1:p1"), agent("w1:p2")]);
++    r.mux.reads.length = 0;
++    await r.shadow.observe([agent("w1:p1"), agent("w1:p2")], (a) => a.paneId === "w1:p2");
++    expect(r.mux.reads.map((read) => read.paneId)).toEqual(["w1:p2"]);
++    expect(r.shadow.surfaceOf("w1:p1")).toEqual({ revision: 7, turn: "idle", modal: "none", composer: "empty" });
++  });
++
+   test("says a Stop has a key only for a pane read under a profile with an interrupt key (M68)", async () => {
+     const r = rig();
+     r.mux.set("w1:p1", IDLE, 7);
+diff --git a/cli/doctor.test.ts b/cli/doctor.test.ts
+index 9c6ab8f9..009fc819 100644
+--- a/cli/doctor.test.ts
++++ b/cli/doctor.test.ts
+@@ -1678,7 +1678,7 @@ describe("mux", () => {
+     const finding = byCheck.get("mux")!;
+     expect(finding.status).toBe("error");
+     expect(finding.detail).toContain("no multiplexers are running");
+-    expect(finding.remedy).toContain("COLLIE_MUX=<durable|herdr|herdr-core|tern|tmux|tuios|zellij> collie start");
++    expect(finding.remedy).toContain("COLLIE_MUX=<durable|herdr|herdr-core|rex|tern|tmux|tuios|zellij> collie start");
+   });
+ 
+   test("nothing configured and two multiplexers running is an error naming both", async () => {
+diff --git a/cli/lifecycle.test.ts b/cli/lifecycle.test.ts
+index bb37f400..0d2aae55 100644
+--- a/cli/lifecycle.test.ts
++++ b/cli/lifecycle.test.ts
+@@ -625,7 +625,7 @@ describe("the first-run multiplexer gate", () => {
+     expect(h.exec.spawned).toHaveLength(0);
+     const said = h.io.stderr.join("\n");
+     expect(said).toContain("no COLLIE_MUX is set, and 2 multiplexers are running");
+-    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|tern|tmux|tuios|zellij> collie start");
++    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|rex|tern|tmux|tuios|zellij> collie start");
+   });
+ });
+ 
+diff --git a/cli/mux-list.test.ts b/cli/mux-list.test.ts
+index 9985f246..c1088d2a 100644
+--- a/cli/mux-list.test.ts
++++ b/cli/mux-list.test.ts
+@@ -141,6 +141,16 @@ describe("presence", () => {
+     expect(rows.find((row) => row.mux === "tern")).toMatchObject({ present: true, where: "/run/user/1000/tern/daemon.sock" });
+     expect(rows.find((row) => row.mux === "tuios")).toMatchObject({ present: true, where: "/run/user/1000/tuios/tuios.sock" });
+   });
++
++  test("rex is present on its server socket, and an installed rex with no server is not", async () => {
++    const socket = `${HOME}/Library/Application Support/rex/server.sock`;
++    const running = world({ files: [socket] });
++    expect((await muxListReport(running.deps)).rows.find((row) => row.mux === "rex")).toMatchObject({ present: true, where: socket });
++    const idle = world({ files: [`${HOME}/.local/bin/rex`] });
++    const rex = (await muxListReport(idle.deps)).rows.find((row) => row.mux === "rex");
++    expect(rex).toMatchObject({ present: false });
++    expect(rex?.where).toContain("no server socket");
++  });
+ });
+ 
+ describe("who drives", () => {
+diff --git a/cli/mux.test.ts b/cli/mux.test.ts
+index cdbba4e3..4032bf35 100644
+--- a/cli/mux.test.ts
++++ b/cli/mux.test.ts
+@@ -241,7 +241,7 @@ describe("with no terminal", () => {
+     expect(said).toContain("no COLLIE_MUX is set");
+     expect(said).toContain("no multiplexers are running");
+     // No hint is possible with nothing found, so the name is left as the choice it is.
+-    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|tern|tmux|tuios|zellij> collie start");
++    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|rex|tern|tmux|tuios|zellij> collie start");
+     expect(h.dotenv()).toBeNull();
+   });
+ 
+@@ -254,7 +254,7 @@ describe("with no terminal", () => {
+     expect(said).toContain("  tmux     a tmux server on tmux's own default server — 2 sessions");
+     // Nothing in this environment names one of them, so nothing is suggested.
+     expect(said).not.toContain("You probably want");
+-    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|tern|tmux|tuios|zellij> collie start");
++    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|rex|tern|tmux|tuios|zellij> collie start");
+     expect(h.dotenv()).toBeNull();
+   });
+ 
+@@ -281,7 +281,7 @@ describe("with no terminal", () => {
+     expect(await ensureMuxChosen(h.deps)).toBe(EXIT.FAIL);
+     const said = h.io.stderr.join("\n");
+     expect(said).not.toContain("You probably want");
+-    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|tern|tmux|tuios|zellij> collie start");
++    expect(said).toContain("  COLLIE_MUX=<durable|herdr|herdr-core|rex|tern|tmux|tuios|zellij> collie start");
+   });
+ 
+   test("a prompt seam that is there is still never used without a terminal", async () => {
+diff --git a/cli/remote.test.ts b/cli/remote.test.ts
+index 13357403..98a2f9ac 100644
+--- a/cli/remote.test.ts
++++ b/cli/remote.test.ts
+@@ -1263,7 +1263,7 @@ describe("the mux decision", () => {
+     expect(h.calls).toHaveLength(0);
+     expect(h.restarts).toBe(0);
+     expect(text(h.io)).toContain("--mux screen is not a multiplexer this build drives");
+-    expect(text(h.io)).toContain("durable, herdr, herdr-core, tern, tmux, tuios, zellij");
++    expect(text(h.io)).toContain("durable, herdr, herdr-core, rex, tern, tmux, tuios, zellij");
+   });
+ 
+   test("--mux writes the name, over one the member already carries, without reading its machine", async () => {

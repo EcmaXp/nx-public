@@ -1,0 +1,8 @@
+[settings]
+all_compile = false
+idiomatic_version_file_enable_tools = ["node", "python"]
+legacy_version_file_disable_tools = ["terraform"]
+locked = true
+lockfile = true
+minimum_release_age = "7d"
+ruby = { compile = false }

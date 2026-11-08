@@ -1,0 +1,198 @@
+#!/usr/bin/env -S just -f
+# nx-git: Git workflow commands
+
+export JUST_JUSTFILE := justfile()
+
+allow-body := ""
+
+# List all commands
+default:
+    @just --list
+
+# Cherry-pick commits from a branch, resetting author to current user while preserving dates
+reclaim branch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd "$NH_FLAKE"
+
+    CURRENT_USER="$(git config user.name)"
+    CURRENT_EMAIL="$(git config user.email)"
+
+    just _require-clean
+
+    commits=$(git cherry HEAD "{{branch}}" | awk '/^\+/ {print $2}')
+
+    if [ -z "$commits" ]; then
+        echo "No commits to reclaim from {{branch}}"
+        exit 0
+    fi
+
+    if ! just allow-body="{{allow-body}}" _require-subject-only $commits; then
+        echo "hint: reword them on {{branch}}, or rerun with nx git allow-body=<hash,...|all> reclaim {{branch}}" >&2
+        exit 1
+    fi
+
+    merges=$(git rev-list --no-walk --min-parents=2 $commits)
+    if [ -n "$merges" ]; then
+        echo "error: cannot reclaim merge commits:" >&2
+        git log --no-walk --format='  %h %s' $merges >&2
+        exit 1
+    fi
+
+    count=$(echo "$commits" | wc -l | tr -d ' ')
+    echo "Reclaiming $count commit(s) from {{branch}} as $CURRENT_USER <$CURRENT_EMAIL>"
+    echo ""
+
+    for commit in $commits; do
+        author_date=$(git log -1 --format="%aI" "$commit")
+        commit_date=$(git log -1 --format="%cI" "$commit")
+        subject=$(git log -1 --format="%s" "$commit")
+
+        echo "  cherry-pick: $subject"
+
+        git cherry-pick "$commit" --no-commit
+        GIT_AUTHOR_DATE="$author_date" GIT_COMMITTER_DATE="$commit_date" \
+            git commit --author="$CURRENT_USER <$CURRENT_EMAIL>" -C "$commit"
+    done
+
+    echo ""
+    echo "Done! Reclaimed $count commit(s)."
+
+# Push main to origin/main and origin/user after checking nothing on user is lost
+sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd "$NH_FLAKE"
+
+    if [ "$(git branch --show-current)" != main ]; then
+        echo "error: not on main" >&2
+        exit 1
+    fi
+    just _require-clean
+
+    git fetch origin main user
+    user_tip=$(git rev-parse origin/user)
+
+    if ! git merge-base --is-ancestor origin/main main; then
+        echo "error: main has diverged from origin/main; rebase first" >&2
+        exit 1
+    fi
+
+    unreclaimed=$(git cherry main origin/user | awk '/^\+/ {print $2}')
+    if [ -n "$unreclaimed" ]; then
+        echo "error: origin/user has commits not on main:" >&2
+        git log --no-walk=unsorted --format='  %h %s' $unreclaimed >&2
+        echo "hint: nx git reclaim origin/user" >&2
+        exit 1
+    fi
+
+    outgoing=$(git rev-list --reverse origin/main..main)
+    if [ -z "$outgoing" ] && [ "$user_tip" = "$(git rev-parse main)" ]; then
+        echo "Already in sync at $(git rev-parse --short main)"
+        exit 0
+    fi
+
+    if [ -n "$outgoing" ]; then
+        if ! just allow-body="{{allow-body}}" _require-subject-only $outgoing; then
+            echo "hint: reword them, or rerun with nx git allow-body=<hash,...|all> sync" >&2
+            exit 1
+        fi
+
+        email="$(git config user.email)"
+        failed=0
+        for commit in $outgoing; do
+            if [ "$(git log -1 --format=%ae "$commit")" != "$email" ]; then
+                echo "error: not authored by $email: $(git log -1 --format='%h %an <%ae> %s' "$commit")" >&2
+                failed=1
+            fi
+            if ! git cat-file -p "$commit" | grep -q '^gpgsig'; then
+                echo "error: unsigned: $(git log -1 --format='%h %s' "$commit")" >&2
+                failed=1
+            fi
+        done
+        [ "$failed" -eq 0 ] || exit 1
+    fi
+
+    git push origin main
+    git push --force-with-lease="user:$user_tip" origin main:user
+
+    echo ""
+    echo "origin/main    $(git rev-parse --short origin/main)"
+    echo "origin/user $(git rev-parse --short origin/user)"
+
+_require-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd "$NH_FLAKE"
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "error: working tree has uncommitted changes" >&2
+        exit 1
+    fi
+
+_require-subject-only +commits:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd "$NH_FLAKE"
+
+    allow="{{allow-body}}"
+    if [ "$allow" = all ]; then
+        exit 0
+    fi
+
+    allowed=()
+    for hash in ${allow//,/ }; do
+        if ! full=$(git rev-parse --verify --quiet "$hash^{commit}"); then
+            echo "error: allow-body: unknown commit $hash" >&2
+            exit 1
+        fi
+        allowed+=("$full")
+    done
+
+    failed=0
+    for commit in {{commits}}; do
+        full=$(git rev-parse "$commit")
+        if [[ " ${allowed[*]} " == *" $full "* ]]; then
+            continue
+        fi
+        if [ -n "$(git log -1 --format=%b "$commit" | tr -d '[:space:]')" ]; then
+            echo "error: commit has a description: $(git log -1 --format='%h %s' "$commit")" >&2
+            failed=1
+        fi
+    done
+    exit "$failed"
+
+# Stage files and commit with message (validates clean tree)
+commit message +files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Validate no staged changes exist
+    if ! git -C "$NH_FLAKE" diff --cached --quiet; then
+        echo "error: staged changes already exist" >&2
+        exit 1
+    fi
+
+    # Stage the specified files
+    git -C "$NH_FLAKE" add {{files}}
+
+    # Validate no other unstaged changes remain
+    if ! git -C "$NH_FLAKE" diff --quiet; then
+        echo "error: unstaged changes exist outside of specified files" >&2
+        git -C "$NH_FLAKE" reset HEAD -- {{files}} >/dev/null
+        exit 1
+    fi
+
+    # Validate no untracked files exist
+    if [ -n "$(git -C "$NH_FLAKE" ls-files --others --exclude-standard)" ]; then
+        echo "error: untracked files exist" >&2
+        git -C "$NH_FLAKE" reset HEAD -- {{files}} >/dev/null
+        exit 1
+    fi
+
+    # Commit with the provided message
+    git -C "$NH_FLAKE" commit -m "{{message}}"

@@ -1,0 +1,183 @@
+{
+  "cleanupPeriodDays": 90,
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_BUG_COMMAND": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "LC_MESSAGES": "en_US.UTF-8",
+    "SIDEPULSE_AGENT_ORIGIN": "Claude Code CLI",
+    "SIDEPULSE_AGENT_ORIGIN_KIND": "claude_cli"
+  },
+  "attribution": {
+    "sessionUrl": false
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gomi:*)"
+    ],
+    "deny": [
+      "Bash(git add .)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(rm:*)",
+      "Edit(~/.cache/nx/agent/rex-blocks/**)",
+      "Edit(~/.local/state/nx/rex-history/**)",
+      "Read(~/.local/state/nx/rex-history/**)",
+      "WebFetch(domain:169.254.169.254)"
+    ],
+    "ask": [
+      "Bash(git commit --amend:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'rex __internal session-start --agent claude --feature-session-naming=false 2>/dev/null || true'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c '[ -x \"$HOME/.nx/bin/nx-session-reindex\" ] && nohup \"$HOME/.nx/bin/nx-session-reindex\" >/dev/null 2>&1 & exit 0'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nx-bash-safe hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "quota_auto_resume_fired|quota_auto_resume_stale|quota_auto_resume_disabled",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'd=\"${NX_QUOTA_LOG_DIR:-$HOME/.local/state/nx/claude}\"; mkdir -p \"$d\" && jq -c \"{ts: (now|floor), event: .hook_event_name, type: (.notification_type // .error), session_id, agent_id, cwd, message, error_details}\" >> \"$d/quota-events.jsonl\"'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "rate_limit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'd=\"${NX_QUOTA_LOG_DIR:-$HOME/.local/state/nx/claude}\"; mkdir -p \"$d\" && jq -c \"{ts: (now|floor), event: .hook_event_name, type: (.notification_type // .error), session_id, agent_id, cwd, message, error_details}\" >> \"$d/quota-events.jsonl\"'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "nx-claude-statusline"
+  },
+  "enabledPlugins": {
+    "nx@nx": true,
+    "codex@openai-codex": true,
+    "cc-plugin-you-should-know@builtin": true
+  },
+  "extraKnownMarketplaces": {
+    "nx": {
+      "source": {
+        "source": "directory",
+        "path": "/etc/nix-darwin"
+      }
+    },
+    "openai-codex": {
+      "source": {
+        "source": "github",
+        "repo": "openai/codex-plugin-cc"
+      }
+    }
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "claude.internal"
+      ],
+      "allowUnixSockets": [
+        "~/.config/op/op-daemon.sock",
+        "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+      ],
+      "allowMachLookup": [
+        "2BUA8C4S2C.com.1password.browser-helper"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        "~/.cache/nx",
+        "~/.cache/uv",
+        "~/.config/op",
+        "~/.local/share/Trash",
+        "~/.local/state/nx",
+        "~/.terraform.d/plugin-cache",
+        "~/Library/Caches/mise",
+        "~/Library/Caches/treefmt",
+        "~/src"
+      ],
+      "denyWrite": [
+        "~/nx/modules/home/programs/claude/code/plugins/nx",
+        "~/.cache/nx/agent/rex-blocks",
+        "~/.local/state/nx/rex-history"
+      ],
+      "denyRead": [
+        "~/.local/state/nx/rex-history"
+      ],
+      "allowRead": [
+        "~/Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/settings/policies.json"
+      ]
+    },
+    "enableWeakerNetworkIsolation": true,
+    "excludedCommands": [
+      "trash"
+    ]
+  },
+  "promptCacheTtl": "1h",
+  "subagentPromptCacheTtl": "1h",
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "high",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "tui": "fullscreen",
+  "autoMemoryEnabled": true,
+  "autoDreamEnabled": true,
+  "showThinkingSummaries": true,
+  "skipWorkflowUsageWarning": true,
+  "switchModelsOnFlag": false,
+  "remoteControlAtStartup": false,
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true,
+  "useAutoModeDuringPlan": true
+}

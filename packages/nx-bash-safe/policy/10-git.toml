@@ -1,0 +1,42 @@
+# Hand-maintained; the extract-policy.py generation contract retired 2026-08.
+# git, whose read surface is per-subcommand.
+# Compiled logic still decides the subcommand key and the post-conditions
+# (a fetch refspec must be a plain ref, `remote get-url` takes exactly one
+# name); the tables below are what those checks validate against.
+
+version = 1
+
+[[command]]
+name = "git"
+kind = "native"
+matcher = "git"
+
+[command.tables]
+"diff" = "--stat --numstat --shortstat --name-only --name-status --color --no-color --dirstat --summary --patch-with-stat --word-diff --word-diff-regex:a --color-words --no-renames --no-ext-diff --check --ws-error-highlight:a --full-index --binary --abbrev:a --break-rewrites --find-renames --find-copies --find-copies-harder --irreversible-delete --diff-algorithm:a --histogram --patience --minimal --ignore-space-at-eol --ignore-space-change --ignore-all-space --ignore-blank-lines --inter-hunk-context:a --function-context --exit-code --quiet --cached --staged --pickaxe-regex --pickaxe-all --no-index --relative:a --diff-filter:a -p -u -s -M -C -B -D -l -S:a -G:a -O:a -R"
+"log" = "--oneline --graph --decorate --no-decorate --date:a --relative-date --all --branches --tags --remotes --since:a --after:a --until:a --before:a --max-count:a -n:a --stat --numstat --shortstat --name-only --name-status --color --no-color --patch -p --no-patch --no-ext-diff -s --author:a --committer:a --grep:a --abbrev-commit --full-history --dense --sparse --simplify-merges --ancestry-path --source --first-parent --merges --no-merges --reverse --walk-reflogs --skip:a --max-age:a --min-age:a --no-min-parents --no-max-parents --follow --no-walk --left-right --cherry-mark --cherry-pick --boundary --topo-order --date-order --author-date-order --pretty:a --format:a --diff-filter:a -S:a -G:a --pickaxe-regex --pickaxe-all --show-signature"
+"show" = "--oneline --graph --decorate --no-decorate --date:a --relative-date --stat --numstat --shortstat --name-only --name-status --color --no-color --patch -p --no-patch --no-ext-diff -s --abbrev-commit --word-diff --word-diff-regex:a --color-words --pretty:a --format:a --first-parent --raw --diff-filter:a -m --quiet --show-signature"
+"status" = "--short -s --branch -b --porcelain --long --verbose -v --untracked-files:a -u:a --ignored --ignore-submodules:a --column --no-column --ahead-behind --no-ahead-behind --renames --no-renames --find-renames:a -M:a"
+"blame" = "--color --no-color -L:a --porcelain -p --line-porcelain --incremental --root --show-stats --show-name --show-number -n --show-email -e -f --date:a -w --ignore-rev:a --ignore-revs-file:a -M -C --score-debug --abbrev:a -s -l -t"
+"shortlog" = "--all --branches --tags --remotes --since:a --after:a --until:a --before:a -s --summary -n --numbered -e --email -c --committer --group:a --format:a --no-merges --author:a"
+"reflog" = "--oneline --graph --decorate --no-decorate --date:a --relative-date --all --branches --tags --remotes --since:a --after:a --until:a --before:a --max-count:a -n:a --author:a --committer:a --grep:a"
+"stash list" = "--oneline --graph --decorate --no-decorate --date:a --relative-date --all --branches --tags --remotes --max-count:a -n:a"
+"stash show" = "--stat --numstat --shortstat --name-only --name-status --color --no-color --patch -p --no-patch --no-ext-diff -s --word-diff --word-diff-regex:a --diff-filter:a --abbrev:a"
+"worktree list" = "--porcelain -v --verbose --expire:a"
+"ls-files" = "--cached -c --deleted -d --modified -m --others -o --ignored -i --stage -s --killed -k --unmerged -u --directory --no-empty-directory --eol --full-name --abbrev:a --debug -z -t -v -f --exclude:a -x:a --exclude-from:a -X:a --exclude-per-directory:a --exclude-standard --error-unmatch --recurse-submodules"
+"ls-remote" = "--branches -b --tags -t --heads -h --refs --quiet -q --exit-code --get-url --symref --sort:a"
+"config" = "--local --global --system --worktree --default:a --type:a --bool --int --bool-or-int --path --expiry-date -z --null --name-only --show-origin --show-scope"
+"remote" = "-v --verbose"
+"remote show" = "-n"
+"merge-base" = "--is-ancestor --fork-point --octopus --independent --all"
+"rev-parse" = "--verify --short:a --abbrev-ref --symbolic --symbolic-full-name --show-toplevel --show-cdup --show-prefix --git-dir --git-common-dir --absolute-git-dir --show-superproject-working-tree --is-inside-work-tree --is-inside-git-dir --is-bare-repository --is-shallow-repository --path-format:a --quiet -q"
+"rev-list" = "--all --branches --tags --remotes --since:a --after:a --until:a --before:a --max-count:a -n:a --author:a --committer:a --grep:a --count --reverse --first-parent --ancestry-path --merges --no-merges --min-parents:a --max-parents:a --no-min-parents --no-max-parents --skip:a --max-age:a --min-age:a --walk-reflogs --oneline --abbrev-commit --pretty:a --format:a --abbrev:a --full-history --dense --sparse --source --graph"
+"describe" = "--tags --match:a --exclude:a --long --abbrev:a --always --contains --first-match --exact-match --candidates:a --dirty --broken"
+"cat-file" = "-t -s -p -e --batch-check --allow-undetermined-type"
+"check-ignore" = "-q --quiet -v --verbose -n --non-matching"
+"fetch" = "--all --prune -p --tags -t --no-tags --quiet -q --verbose -v --depth:a --unshallow --dry-run"
+"ls-tree" = "-r -t -d -l --long -z --name-only --name-status --object-only --full-name --full-tree --abbrev:a --format:a"
+"remote get-url" = "--push --all"
+"for-each-ref" = "--format:a --sort:a --count:a --contains:a --no-contains:a --merged:a --no-merged:a --points-at:a"
+"grep" = "-e:a -E --extended-regexp -G --basic-regexp -F --fixed-strings -P --perl-regexp -i --ignore-case -v --invert-match -w --word-regexp -n --line-number -c --count -l --files-with-matches -L --files-without-match -h -H --heading --break --full-name --color --no-color -o --only-matching -A:a --after-context:a -B:a --before-context:a -C:a --context:a --and --or --not --max-depth:a --untracked --no-index --recurse-submodules --cached --threads:a -q --quiet"
+"tag" = "-l --list -n:a --contains:a --no-contains:a --merged:a --no-merged:a --sort:a --format:a --points-at:a --column --no-column -i --ignore-case"
+"branch" = "-l --list -a --all -r --remotes -v -vv --verbose --color --no-color --column --no-column --abbrev:a --no-abbrev --contains:a --no-contains:a --merged:a --no-merged:a --points-at:a --sort:a --show-current -i --ignore-case"

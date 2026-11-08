@@ -1,0 +1,57 @@
+{"c": "cat <<'PY' | uv run python -\nprint(1)\nPY", "cuts": [], "e": false, "segs": [["cat"], ["uv", "run", "python", "-"]]}
+{"c": "cat <<EOF > /tmp/out\nbody\nEOF", "cuts": [], "e": false, "segs": [["cat"]]}
+{"c": "cat <<'EOF'\nbody\nEOF", "cuts": [], "e": false, "segs": [["cat"]]}
+{"c": "grep x <<< \"literal\"", "cuts": [], "e": false, "segs": [["grep", "x"]]}
+{"c": "./bin/tool show run-1 2>&1 | grep -v \"A\\|B\" | grep -A1 \"name\\\" x\" | head -2\n./bin/tool show run-1 2>&1 | grep -v \"A\\|B\" | head -1", "cuts": [75], "e": false, "segs": [["./bin/tool", "show", "run-1"], ["grep", "-v", "A\\|B"], ["grep", "-A1", "name\\\" x"], ["head", "-2"]]}
+{"c": "./bin/tool show run-1 2>&1 | grep -v \"A\\|B\" | grep -A1 \"name\\\" x\" | head -2\n./bin/tool show run-2 2>&1 | grep -v \"A\\|B\" | grep -A1 \"name\\\" x\" | head -2\n./bin/tool show run-3 2>&1 | grep -v \"A\\|B\" | head -1", "cuts": [75, 151], "e": false, "segs": [["./bin/tool", "show", "run-1"], ["grep", "-v", "A\\|B"], ["grep", "-A1", "name\\\" x"], ["head", "-2"]]}
+{"c": "ls -1 /d/ 2>&1 | grep -i x\nls -1 '/e/' 2>&1 | grep -i x", "cuts": [], "e": false, "segs": [["ls", "-1", "/d/"], ["grep", "-i", "x"], ["ls", "-1", "/e/"], ["grep", "-i", "x"]]}
+{"c": "rg -n foo src/\nrg -n bar src/\nrg -n baz src/", "cuts": [], "e": false, "segs": [["rg", "-n", "foo", "src/"], ["rg", "-n", "bar", "src/"], ["rg", "-n", "baz", "src/"]]}
+{"c": "rg -n \\\n  foo src/", "cuts": [], "e": false, "segs": [["rg", "-n", "foo", "src/"]]}
+{"c": "echo \"line1\nline2\"", "cuts": [], "e": false, "segs": [["echo", "line1line2"]]}
+{"c": "head -5 (which acme)", "cuts": [], "e": true, "segs": []}
+{"c": "git commit -F -", "cuts": [], "e": false, "segs": [["git", "commit", "-F", "-"]]}
+{"c": "rg foo | head -5", "cuts": [], "e": false, "segs": [["rg", "foo"], ["head", "-5"]]}
+{"c": "cd sub && git status", "cuts": [], "e": false, "segs": [["cd", "sub"], ["git", "status"]]}
+{"c": "! grep -q x file", "cuts": [], "e": false, "segs": [["grep", "-q", "x", "file"]]}
+{"c": "(cd sub && ls)", "cuts": [], "e": false, "segs": [["cd", "sub"], ["ls"]]}
+{"c": "{ ls; cat f; }", "cuts": [], "e": false, "segs": [["ls"], ["cat", "f"]]}
+{"c": "if git diff --quiet; then echo clean; fi", "cuts": [], "e": false, "segs": [["git", "diff", "--quiet"], ["echo", "clean"]]}
+{"c": "if test -f f; then echo a; else echo b; fi", "cuts": [], "e": false, "segs": [["test", "-f", "f"], ["echo", "a"], ["echo", "b"]]}
+{"c": "while read -r line; do echo $line; done", "cuts": [], "e": false, "segs": [["read", "-r", "line"], ["echo", "<expansion>"]]}
+{"c": "for f in a b; do echo $f; done", "cuts": [], "e": false, "segs": [["echo", "<expansion>"]]}
+{"c": "for f in *.py; do cat $f; done", "cuts": [], "e": false, "segs": [["cat", "<expansion>"]]}
+{"c": "case $x in a) echo 1;; esac", "cuts": [], "e": false, "segs": []}
+{"c": "f() { echo 1; }", "cuts": [], "e": false, "segs": []}
+{"c": "sleep 1 &", "cuts": [], "e": false, "segs": [["sleep", "1"]]}
+{"c": "terraform validate 2>&1 | tail -5", "cuts": [], "e": false, "segs": [["terraform", "validate"], ["tail", "-5"]]}
+{"c": "echo hi > /dev/null", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "echo hi >> /tmp/log", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "echo hi > /tmp/claude/out.txt", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "echo hi > $TMPDIR/out.txt", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "echo hi > \"$SCRATCHPAD/out.txt\"", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "echo hi > repo/file.txt", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "echo hi > ../escape.txt", "cuts": [], "e": false, "segs": [["echo", "hi"]]}
+{"c": "cat < input.txt", "cuts": [], "e": false, "segs": [["cat"]]}
+{"c": "diff a b 1>&2", "cuts": [], "e": false, "segs": [["diff", "a", "b"]]}
+{"c": "rg $FLAGS pattern src/", "cuts": [], "e": false, "segs": [["rg", "<expansion>", "pattern", "src/"]]}
+{"c": "echo $HOME", "cuts": [], "e": false, "segs": [["echo", "/nonexistent"]]}
+{"c": "echo ${HOME}", "cuts": [], "e": false, "segs": [["echo", "/nonexistent"]]}
+{"c": "echo $(git rev-parse HEAD)", "cuts": [], "e": false, "segs": [["git", "rev-parse", "HEAD"], ["echo", "<expansion>"]]}
+{"c": "echo `git rev-parse HEAD`", "cuts": [], "e": false, "segs": [["git", "rev-parse", "HEAD"], ["echo", "<expansion>"]]}
+{"c": "echo $((1 + 2))", "cuts": [], "e": false, "segs": [["echo", "<expansion>"]]}
+{"c": "diff <(git show a:f) <(git show b:f)", "cuts": [], "e": false, "segs": [["git", "show", "a:f"], ["git", "show", "b:f"], ["diff", "<expansion>", "<expansion>"]]}
+{"c": "tee >(cat) < f", "cuts": [], "e": false, "segs": []}
+{"c": "x=$(git rev-parse HEAD) && echo $x", "cuts": [], "e": false, "segs": [["git", "rev-parse", "HEAD"], ["x=<expansion>"], ["echo", "<expansion>"]]}
+{"c": "AWS_PROFILE=prod aws s3 ls", "cuts": [], "e": false, "segs": [["AWS_PROFILE=value", "aws", "s3", "ls"]]}
+{"c": "export AWS_PROFILE=prod", "cuts": [], "e": false, "segs": [["export", "AWS_PROFILE=value"]]}
+{"c": "unset AWS_PROFILE", "cuts": [], "e": false, "segs": [["unset", "AWS_PROFILE"]]}
+{"c": "PATH=/evil git status", "cuts": [], "e": false, "segs": [["PATH=value", "git", "status"]]}
+{"c": "grep -r 'pat tern' src/", "cuts": [], "e": false, "segs": [["grep", "-r", "pat tern", "src/"]]}
+{"c": "grep -r \"pat $VAR tern\" src/", "cuts": [], "e": false, "segs": [["grep", "-r", "<expansion>", "src/"]]}
+{"c": "echo pre$VARpost", "cuts": [], "e": false, "segs": [["echo", "<expansion>"]]}
+{"c": "echo $'ansi\\tstring'", "cuts": [], "e": false, "segs": [["echo", "$'ansi\\tstring'"]]}
+{"c": "echo $(echo $(echo $(echo 1)))", "cuts": [], "e": false, "segs": [["echo", "1"], ["echo", "<expansion>"], ["echo", "<expansion>"], ["echo", "<expansion>"]]}
+{"c": "ls # trailing comment", "cuts": [], "e": false, "segs": [["ls"]]}
+{"c": "D=/x; rg -n pat $D/src", "cuts": [], "e": false, "segs": [["D=value"], ["rg", "-n", "pat", "/x/src"]]}
+{"c": "cat $HOME/notes.txt", "cuts": [], "e": false, "segs": [["cat", "/nonexistent/notes.txt"]]}
+{"c": "F=$(latest); rg -n foo $F", "cuts": [], "e": false, "segs": [["latest"], ["F=<expansion>"], ["rg", "-n", "foo", "<expansion>"]]}

@@ -1,0 +1,1061 @@
+From b77afab6f9c866761f1ef2df9d624ba0b0b27bc0 Mon Sep 17 00:00:00 2001
+From: user <user@example.com>
+Date: Sun, 18 Oct 2026 09:43:57 +0000
+Subject: [PATCH] fix(engine): nx patch set for system-manager
+
+- numtide/system-manager#551 (etc activation failures)
+- user/dropped-backups: restore backed-up entries dropped from the config
+- user/446-ephemeral: keep --ephemeral activation under /run (#446),
+  apply tmpfiles rules that replaced an existing file, skip the userborn
+  restart when the unit is not found
+- nx only: route more ephemeral runtime config dirs to /run
+---
+ crates/system-manager-engine/src/activate.rs  |  79 +++-
+ .../src/activate/etc_files.rs                 | 350 ++++++++++++++++--
+ .../src/activate/services.rs                  |  92 +----
+ .../src/activate/tmp_files.rs                 |   5 +-
+ crates/system-manager-engine/src/lib.rs       |  38 +-
+ .../container-tests/check-ephemeral-flag.nix  |  62 ++++
+ .../dropped-backed-up-files.nix               |  66 ++++
+ .../tmpfiles-replace-existing.nix             |  27 ++
+ .../container-tests/userborn-disabled.nix     |  25 ++
+ 9 files changed, 629 insertions(+), 115 deletions(-)
+ create mode 100644 testFlake/container-tests/check-ephemeral-flag.nix
+ create mode 100644 testFlake/container-tests/dropped-backed-up-files.nix
+ create mode 100644 testFlake/container-tests/tmpfiles-replace-existing.nix
+ create mode 100644 testFlake/container-tests/userborn-disabled.nix
+
+diff --git a/crates/system-manager-engine/src/activate.rs b/crates/system-manager-engine/src/activate.rs
+index fce3d8d..41a5a41 100644
+--- a/crates/system-manager-engine/src/activate.rs
++++ b/crates/system-manager-engine/src/activate.rs
+@@ -145,7 +145,18 @@ pub fn activate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+     log::info!("Activating etc files...");
+ 
+     match etc_files::activate(store_path, old_state.file_tree, ephemeral) {
+-        Ok(etc_tree) => {
++        Ok((etc_tree, failed_etc_files)) => {
++            // Restarting a service on a configuration file we know we failed
++            // to write is worse than not restarting it at all.
++            if !failed_etc_files.is_empty() {
++                let final_state = StateV1 {
++                    file_tree: etc_tree,
++                    ..old_state
++                };
++                final_state.write_to_file(state_file)?;
++                return bail_on_failed_etc_files(&failed_etc_files);
++            }
++
+             log::info!("Restarting sysinit-reactivation.target...");
+             services::restart_sysinit_reactivation_target()?;
+ 
+@@ -155,7 +166,13 @@ pub fn activate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+             }
+ 
+             log::info!("Activating tmp files...");
+-            let tmp_result = tmp_files::activate(&etc_tree.files);
++            let tmp_result = tmp_files::activate(
++                &etc_tree
++                    .files
++                    .union(&etc_tree.backed_up_files)
++                    .cloned()
++                    .collect(),
++            );
+             if let Err(e) = &tmp_result {
+                 log::error!("Error during activation of tmp files");
+                 log::error!("{e}");
+@@ -195,11 +212,32 @@ pub fn activate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+                 ..old_state
+             };
+             final_state.write_to_file(state_file)?;
+-            Ok(())
++            Err(source)
+         }
+     }
+ }
+ 
++/// Turn the per-file warnings emitted during etc activation into a failure.
++///
++/// Files we deliberately leave alone, such as an unmanaged path without
++/// `replaceExisting`, are not reported here: only an attempt to write a file
++/// that failed counts, so that "activation succeeded" means /etc holds what the
++/// generation says it should.
++fn bail_on_failed_etc_files(failed: &[PathBuf]) -> Result<()> {
++    if failed.is_empty() {
++        return Ok(());
++    }
++    anyhow::bail!(
++        "Failed to create {} file(s) under /etc, see the errors above: {}",
++        failed.len(),
++        failed
++            .iter()
++            .map(|path| path.display().to_string())
++            .collect::<Vec<_>>()
++            .join(", ")
++    )
++}
++
+ pub fn prepopulate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+     log::info!("Pre-populating system-manager profile: {store_path}");
+     if ephemeral {
+@@ -216,8 +254,8 @@ pub fn prepopulate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+ 
+     log::info!("Activating etc files...");
+ 
+-    match etc_files::activate(store_path, old_state.file_tree, ephemeral) {
+-        Ok(etc_tree) => {
++    let failed_etc_files = match etc_files::activate(store_path, old_state.file_tree, ephemeral) {
++        Ok((etc_tree, failed_etc_files)) => {
+             log::info!("Registering systemd services...");
+             match services::get_active_services(store_path, old_state.services) {
+                 Ok(services) => StateV1 {
+@@ -234,6 +272,8 @@ pub fn prepopulate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+                     }
+                 }
+             }
++            .write_to_file(state_file)?;
++            failed_etc_files
+         }
+         Err(ActivationError::WithPartialResult { result, source }) => {
+             log::error!("Error during activation: {source:?}");
+@@ -241,9 +281,11 @@ pub fn prepopulate(store_path: &StorePath, ephemeral: bool) -> Result<()> {
+                 file_tree: result,
+                 ..old_state
+             }
++            .write_to_file(state_file)?;
++            return Err(source);
+         }
+-    }
+-    .write_to_file(state_file)?;
++    };
++    bail_on_failed_etc_files(&failed_etc_files)?;
+     Ok(())
+ }
+ 
+@@ -267,3 +309,26 @@ pub(crate) fn get_state_file() -> Result<PathBuf> {
+         .create(SYSTEM_MANAGER_STATE_DIR)?;
+     Ok(state_file)
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn no_failed_etc_files_is_not_an_error() {
++        assert!(bail_on_failed_etc_files(&[]).is_ok());
++    }
++
++    #[test]
++    fn failed_etc_files_are_all_named_in_the_error() {
++        let err = bail_on_failed_etc_files(&[
++            PathBuf::from("/etc/nix/nix.conf"),
++            PathBuf::from("/etc/sudoers"),
++        ])
++        .expect_err("failures must fail the activation");
++        let msg = err.to_string();
++        assert!(msg.contains("2 file(s)"), "{msg}");
++        assert!(msg.contains("/etc/nix/nix.conf"), "{msg}");
++        assert!(msg.contains("/etc/sudoers"), "{msg}");
++    }
++}
+diff --git a/crates/system-manager-engine/src/activate/etc_files.rs b/crates/system-manager-engine/src/activate/etc_files.rs
+index 3904d87..9378d3b 100644
+--- a/crates/system-manager-engine/src/activate/etc_files.rs
++++ b/crates/system-manager-engine/src/activate/etc_files.rs
+@@ -1,5 +1,5 @@
+ pub mod etc_tree;
+-use anyhow::{anyhow, Context};
++use anyhow::Context;
+ use im::HashMap;
+ use regex;
+ use serde::{Deserialize, Serialize};
+@@ -13,9 +13,16 @@ use std::{fs, io};
+ 
+ use super::ActivationResult;
+ use crate::activate::{ActivationError, EtcFilesState};
+-use crate::{etc_dir, remove_file, remove_link, StorePath};
++use crate::{
++    ensure_ephemeral_runtime_dirs, etc_dir, etc_target, remove_file, remove_link, StorePath,
++};
+ 
+ type EtcActivationResult = ActivationResult<EtcFilesState>;
++/// The state we managed to build, plus every target we failed to write.
++///
++/// Only the success path carries the failure list: an error here means the walk
++/// was abandoned, so there is no per-file outcome to report.
++type EtcActivationOutcome = Result<(EtcFilesState, Vec<PathBuf>), ActivationError<EtcFilesState>>;
+ 
+ static UID_GID_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+ 
+@@ -93,14 +100,16 @@ pub fn activate(
+     store_path: &StorePath,
+     old_state: EtcFilesState,
+     ephemeral: bool,
+-) -> EtcActivationResult {
++) -> EtcActivationOutcome {
+     let config = read_config(store_path)
+         .map_err(|e| ActivationError::with_partial_result(old_state.clone(), e))?;
+ 
+     let etc_dir = etc_dir(ephemeral);
+     log::info!("Creating /etc entries in {}", etc_dir.display());
+-
+-    let mut new_state = EtcFilesState::default();
++    if ephemeral {
++        ensure_ephemeral_runtime_dirs()
++            .map_err(|e| ActivationError::with_partial_result(old_state.clone(), e))?;
++    }
+ 
+     // Walk through static link, list entries
+     let mut entries = match list_static_entries(&config) {
+@@ -124,15 +133,40 @@ pub fn activate(
+         .collect();
+     entries.append(&mut non_static_entries);
+     // Create dirs and link/copy entries
+-    new_state = create_etc_files(entries, new_state.clone(), &old_state, &etc_dir)?;
++    let (mut new_state, failed) =
++        create_etc_files(entries, EtcFilesState::default(), &old_state, &etc_dir);
++    retain_failed_targets(&mut new_state, &old_state, &failed);
+     // Delete unecessary files
+     let files_to_delete: HashSet<PathBuf> = old_state
+         .files
+-        .difference(&new_state.files)
++        .union(&old_state.backed_up_files)
++        .filter(|f| !new_state.contains(f))
+         .map(|f| f.to_owned())
+         .collect();
++    // Marked as backed up so delete_paths restores them.
++    new_state.backed_up_files.extend(
++        old_state
++            .backed_up_files
++            .intersection(&files_to_delete)
++            .cloned(),
++    );
+     new_state = delete_paths(&files_to_delete, new_state);
+-    Ok(new_state)
++    Ok((new_state, failed))
++}
++
++/// Carry a target we failed to write over from the old state.
++///
++/// Without this it looks like a target that left the configuration: we would
++/// delete the file we just failed to replace, and forget that it was ever ours,
++/// so the next activation would refuse to touch it as unmanaged.
++fn retain_failed_targets(state: &mut EtcFilesState, old_state: &EtcFilesState, failed: &[PathBuf]) {
++    for target in failed {
++        if old_state.backed_up_files.contains(target) {
++            state.backed_up_files.insert(target.clone());
++        } else if old_state.files.contains(target) {
++            state.files.insert(target.clone());
++        }
++    }
+ }
+ 
+ pub fn deactivate(old_state: EtcFilesState) -> EtcActivationResult {
+@@ -152,8 +186,37 @@ fn backup_path_for(path: &Path) -> PathBuf {
+     s
+ }
+ 
++/// Clear a directory sitting where a managed file belongs.
++///
++/// Such a path can neither be unlinked (EISDIR) nor moved into the backup slot,
++/// because rename(2) refuses to put a directory back over the symlink we create
++/// (ENOTDIR), which would leave the backup unrestorable. An empty directory has
++/// nothing worth keeping, so drop it; anything else needs an operator, and
++/// recursing under /etc on the strength of a state file is not a trade worth
++/// making.
++fn remove_dir_in_the_way(target: &Path) -> anyhow::Result<()> {
++    log::info!(
++        "Trying to remove empty directory in the way: {}",
++        target.display()
++    );
++    fs::remove_dir(target).with_context(|| {
++        format!(
++            "{} is a non-empty directory where a file is expected, remove it and re-run",
++            target.display()
++        )
++    })
++}
++
+ fn backup_existing_file(path: &Path) -> anyhow::Result<()> {
+     let backup_path = backup_path_for(path);
++    // fs::rename clobbers its destination, which would discard the
++    // pre-system-manager original that deactivate restores from.
++    if backup_path.exists() || backup_path.is_symlink() {
++        anyhow::bail!(
++            "Refusing to overwrite the existing backup at {}",
++            backup_path.display()
++        );
++    }
+     log::info!(
+         "Backing up existing file {} to {}",
+         path.display(),
+@@ -255,7 +318,7 @@ fn list_static_entries(config_entries: &EtcFilesConfig) -> anyhow::Result<Vec<Et
+                     source: StorePath {
+                         store_path: canon_path,
+                     },
+-                    target: PathBuf::from("/etc").join(target),
++                    target,
+                     uid: 0,
+                     gid: 0,
+                     group: "".to_string(),
+@@ -282,32 +345,35 @@ fn create_etc_files(
+     mut state: EtcFilesState,
+     old_state: &EtcFilesState,
+     etc_dir: &Path,
+-) -> EtcActivationResult {
++) -> (EtcFilesState, Vec<PathBuf>) {
++    let mut failed = Vec::new();
+     files.sort_by(|a, b| a.target.cmp(&b.target));
+     for file in files {
+-        let target = file.target.clone();
++        let target = etc_target(etc_dir, &file.target);
+         state = match create_etc_file(file, state, old_state, etc_dir) {
+             Ok(state) => state,
+             Err(ActivationError::WithPartialResult { result, source }) => {
+-                log::warn!("Can't link/copy {} to : {}", target.display(), source);
++                log::error!("Failed to write {}: {source:#}", target.display());
++                failed.push(target);
+                 result
+             }
+         }
+     }
+-    Ok(state)
++    (state, failed)
+ }
+ 
+ /// Create a single etc file.
+ ///
+-/// We separated this from `create_etc_files` to catch any error on a file boundary
+-/// to make sure failing to link a file do not cancel the whole etc activation.
++/// We separated this from `create_etc_files` to catch any error on a file
++/// boundary, so that failing to link one file does not abandon the rest of the
++/// walk. The caller still collects those failures and fails the activation.
+ fn create_etc_file(
+     file: EtcFile,
+     mut state: EtcFilesState,
+     old_state: &EtcFilesState,
+     etc_dir: &Path,
+ ) -> EtcActivationResult {
+-    let target = PathBuf::from(etc_dir).join(&file.target);
++    let target = etc_target(etc_dir, &file.target);
+     log::debug!(
+         "Creating {} to {} ({})",
+         file.source,
+@@ -316,7 +382,15 @@ fn create_etc_file(
+     );
+     // Create all dirs
+     log::debug!("Creating all dirs up to {:?}", target.parent());
+-    target.parent().map(fs::create_dir_all);
++    if let Some(parent) = target.parent() {
++        fs::create_dir_all(parent).map_err(|e| {
++            ActivationError::with_partial_result(
++                state.clone(),
++                anyhow::Error::from(e)
++                    .context(format!("creating the parent dir of {}", target.display())),
++            )
++        })?;
++    }
+ 
+     // We want to override all the Ubuntu systemd .wants and .requires entries.
+     // We did not find a proper way to do that from the Nix static env,
+@@ -325,7 +399,14 @@ fn create_etc_file(
+ 
+     if file.mode == "symlink" {
+         // On some symlinks, target.exists() returns false. Not sure why.
+-        let exists = target.exists() || target.is_symlink();
++        let mut exists = target.exists() || target.is_symlink();
++        let may_replace =
++            old_state.contains(&target) || file.replace_existing || target_is_in_systemd_dir;
++        if exists && may_replace && !target.is_symlink() && target.is_dir() {
++            remove_dir_in_the_way(&target)
++                .map_err(|e| ActivationError::with_partial_result(state.clone(), e))?;
++            exists = false;
++        }
+         if exists {
+             // If the target exists and has been created by a previous system-manager activation,
+             // replace it.
+@@ -372,7 +453,14 @@ fn create_etc_file(
+                     source: e.into(),
+                 }
+             })?;
+-            state.files.insert(target);
++            // A target we backed up once keeps that classification even if our
++            // symlink has since gone missing, so that deactivate still has the
++            // original to restore.
++            if old_state.backed_up_files.contains(&target) {
++                state.backed_up_files.insert(target);
++            } else {
++                state.files.insert(target);
++            }
+         }
+     } else {
+         log::debug!("{} is a regular file", file.source);
+@@ -457,7 +545,8 @@ fn find_gid(entry: &EtcFile) -> anyhow::Result<u32> {
+ }
+ 
+ /// Copy a file from source to target.
+-/// Failing to copy a file shouldn't stop the overall activation, hence the anyhow return.
++/// Failing to copy a file doesn't abandon the rest of the walk, hence the
++/// per-file error return; the caller collects it and fails the activation.
+ fn copy_file(
+     source: &Path,
+     target: &PathBuf,
+@@ -465,7 +554,15 @@ fn copy_file(
+     old_state: &EtcFilesState,
+     mut new_state: EtcFilesState,
+ ) -> EtcActivationResult {
+-    let exists = target.exists() || target.is_symlink();
++    let mut exists = target.exists() || target.is_symlink();
++    if exists
++        && (old_state.contains(target) || entry.replace_existing)
++        && !target.is_symlink()
++        && target.is_dir()
++    {
++        remove_dir_in_the_way(target).map_err(|e| to_activation_result(e, &new_state))?;
++        exists = false;
++    }
+     let exists_and_need_backup = exists && !old_state.contains(target) && entry.replace_existing;
+     if exists && !old_state.contains(target) {
+         if exists_and_need_backup {
+@@ -474,11 +571,10 @@ fn copy_file(
+                 source: e,
+             })?;
+         } else {
+-            let error = anyhow!("File {} already exists, ignoring. Set replaceExisting if you want to back it up and override it.", target.display());
+-            return Err(ActivationError::WithPartialResult {
+-                result: new_state,
+-                source: error,
+-            });
++            // Deliberately left alone rather than clobbered, so this is not a
++            // failure and must not fail the activation.
++            log::warn!("File {} already exists, ignoring. Set replaceExisting if you want to back it up and override it.", target.display());
++            return Ok(new_state);
+         }
+     };
+     log::debug!(
+@@ -519,3 +615,205 @@ fn copy_file(
+     }
+     Ok(new_state)
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    struct Fixture {
++        _tmp: tempfile::TempDir,
++        etc: PathBuf,
++        source: PathBuf,
++    }
++
++    fn fixture() -> Fixture {
++        let tmp = tempfile::tempdir().expect("tempdir");
++        let etc = tmp.path().join("etc");
++        let store = tmp.path().join("store");
++        fs::create_dir_all(&etc).unwrap();
++        fs::create_dir_all(&store).unwrap();
++        let source = store.join("managed.conf");
++        fs::write(&source, "managed\n").unwrap();
++        Fixture {
++            _tmp: tmp,
++            etc,
++            source,
++        }
++    }
++
++    fn entry(target: &str, source: &Path, mode: &str, replace_existing: bool) -> EtcFile {
++        EtcFile {
++            source: StorePath {
++                store_path: source.to_owned(),
++            },
++            target: PathBuf::from(target),
++            uid: 0,
++            gid: 0,
++            group: "+0".to_owned(),
++            user: "+0".to_owned(),
++            mode: mode.to_owned(),
++            replace_existing,
++        }
++    }
++
++    #[test]
++    fn an_empty_directory_at_the_target_is_replaced() {
++        let f = fixture();
++        fs::create_dir_all(f.etc.join("nix/nix.conf")).unwrap();
++
++        let (state, failed) = create_etc_files(
++            vec![entry("nix/nix.conf", &f.source, "symlink", true)],
++            EtcFilesState::default(),
++            &EtcFilesState::default(),
++            &f.etc,
++        );
++
++        assert!(failed.is_empty(), "unexpected failures: {failed:?}");
++        let target = f.etc.join("nix/nix.conf");
++        assert!(target.is_symlink(), "target should be our symlink");
++        assert_eq!(fs::read_to_string(&target).unwrap(), "managed\n");
++        assert!(state.files.contains(&target));
++    }
++
++    #[test]
++    fn a_non_empty_directory_at_the_target_fails_and_is_left_alone() {
++        let f = fixture();
++        fs::create_dir_all(f.etc.join("nix/nix.conf")).unwrap();
++        fs::write(f.etc.join("nix/nix.conf/keep"), "keep me\n").unwrap();
++
++        let (state, failed) = create_etc_files(
++            vec![entry("nix/nix.conf", &f.source, "symlink", true)],
++            EtcFilesState::default(),
++            &EtcFilesState::default(),
++            &f.etc,
++        );
++
++        assert_eq!(failed, vec![f.etc.join("nix/nix.conf")]);
++        assert!(
++            f.etc.join("nix/nix.conf/keep").exists(),
++            "a non-empty directory must never be deleted"
++        );
++        assert!(state.files.is_empty());
++    }
++
++    #[test]
++    fn a_managed_directory_at_the_target_is_replaced() {
++        let f = fixture();
++        let target = f.etc.join("nix/nix.conf");
++        fs::create_dir_all(&target).unwrap();
++        let old_state = EtcFilesState {
++            files: HashSet::from([target.clone()]),
++            ..EtcFilesState::default()
++        };
++
++        let (_, failed) = create_etc_files(
++            vec![entry("nix/nix.conf", &f.source, "symlink", false)],
++            EtcFilesState::default(),
++            &old_state,
++            &f.etc,
++        );
++
++        assert!(failed.is_empty(), "unexpected failures: {failed:?}");
++        assert!(target.is_symlink());
++    }
++
++    #[test]
++    fn an_unmanaged_symlink_target_without_replace_existing_is_skipped_without_failing() {
++        let f = fixture();
++        let target = f.etc.join("keep-me");
++        fs::write(&target, "original\n").unwrap();
++
++        let (state, failed) = create_etc_files(
++            vec![entry("keep-me", &f.source, "symlink", false)],
++            EtcFilesState::default(),
++            &EtcFilesState::default(),
++            &f.etc,
++        );
++
++        assert!(failed.is_empty(), "a deliberate skip is not a failure");
++        assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
++        assert!(state.files.is_empty());
++    }
++
++    #[test]
++    fn an_unmanaged_copy_target_without_replace_existing_is_skipped_without_failing() {
++        let f = fixture();
++        let target = f.etc.join("keep-me");
++        fs::write(&target, "original\n").unwrap();
++
++        let (state, failed) = create_etc_files(
++            vec![entry("keep-me", &f.source, "0644", false)],
++            EtcFilesState::default(),
++            &EtcFilesState::default(),
++            &f.etc,
++        );
++
++        assert!(failed.is_empty(), "a deliberate skip is not a failure");
++        assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
++        assert!(state.files.is_empty());
++    }
++
++    #[test]
++    fn a_failed_target_stays_managed_and_is_not_deleted() {
++        let f = fixture();
++        let target = f.etc.join("nix/nix.conf");
++        fs::create_dir_all(&target).unwrap();
++        fs::write(target.join("keep"), "keep me\n").unwrap();
++        let old_state = EtcFilesState {
++            files: HashSet::from([target.clone()]),
++            ..EtcFilesState::default()
++        };
++
++        let (mut state, failed) = create_etc_files(
++            vec![entry("nix/nix.conf", &f.source, "symlink", false)],
++            EtcFilesState::default(),
++            &old_state,
++            &f.etc,
++        );
++        assert_eq!(failed, vec![target.clone()]);
++        retain_failed_targets(&mut state, &old_state, &failed);
++
++        assert!(state.files.contains(&target), "must stay managed");
++        assert!(
++            old_state.files.difference(&state.files).next().is_none(),
++            "must not be scheduled for deletion"
++        );
++    }
++
++    #[test]
++    fn a_failed_target_keeps_its_backup_classification() {
++        let f = fixture();
++        let target = f.etc.join("sudoers");
++        let old_state = EtcFilesState {
++            backed_up_files: HashSet::from([target.clone()]),
++            ..EtcFilesState::default()
++        };
++        let mut state = EtcFilesState::default();
++
++        retain_failed_targets(&mut state, &old_state, std::slice::from_ref(&target));
++
++        assert!(state.backed_up_files.contains(&target));
++        assert!(state.files.is_empty());
++    }
++
++    #[test]
++    fn an_existing_backup_is_never_overwritten() {
++        let f = fixture();
++        let target = f.etc.join("sudoers");
++        fs::write(&target, "current\n").unwrap();
++        fs::write(backup_path_for(&target), "installer original\n").unwrap();
++
++        let (_, failed) = create_etc_files(
++            vec![entry("sudoers", &f.source, "symlink", true)],
++            EtcFilesState::default(),
++            &EtcFilesState::default(),
++            &f.etc,
++        );
++
++        assert_eq!(failed, vec![f.etc.join("sudoers")]);
++        assert_eq!(
++            fs::read_to_string(backup_path_for(&target)).unwrap(),
++            "installer original\n"
++        );
++    }
++}
+diff --git a/crates/system-manager-engine/src/activate/services.rs b/crates/system-manager-engine/src/activate/services.rs
+index 3b57032..2bcaff2 100644
+--- a/crates/system-manager-engine/src/activate/services.rs
++++ b/crates/system-manager-engine/src/activate/services.rs
+@@ -1,14 +1,14 @@
+ use anyhow::Context;
+ use im::{HashMap, HashSet};
+ use serde::{Deserialize, Serialize};
+-use std::path::{self, Path, PathBuf};
++use std::path::Path;
+ use std::time::Duration;
+ use std::{fs, io};
+ 
+ use super::ActivationResult;
+ use crate::activate::ActivationError;
+ use crate::unit_info::{parse_systemd_bool, parse_unit};
+-use crate::{create_link, etc_dir, systemd, StorePath};
++use crate::{ensure_ephemeral_runtime_dirs, systemd, StorePath};
+ 
+ type ServiceActivationResult = ActivationResult<Services>;
+ 
+@@ -63,9 +63,6 @@ pub fn activate(
+     old_services: Services,
+     ephemeral: bool,
+ ) -> ServiceActivationResult {
+-    verify_systemd_dir(ephemeral)
+-        .map_err(|e| ActivationError::with_partial_result(old_services.clone(), e))?;
+-
+     let services = get_active_services(store_path, old_services.clone())?;
+ 
+     let (masked, active): (Services, Services) = services
+@@ -172,66 +169,15 @@ fn get_services_to_stop(services_to_stop: Services) -> Services {
+     services_to_stop
+ }
+ 
+-fn systemd_system_dir(ephemeral: bool) -> PathBuf {
+-    if ephemeral {
+-        Path::new(path::MAIN_SEPARATOR_STR)
+-            .join("run")
+-            .join("systemd")
+-            .join("system")
+-    } else {
+-        Path::new(path::MAIN_SEPARATOR_STR)
+-            .join("etc")
+-            .join("systemd")
+-            .join("system")
+-    }
+-}
+-
+-fn verify_systemd_dir(ephemeral: bool) -> anyhow::Result<()> {
+-    if ephemeral {
+-        let system_dir = systemd_system_dir(ephemeral);
+-        if system_dir.exists()
+-            && !system_dir.is_symlink()
+-            && system_dir.is_dir()
+-            && system_dir.read_dir()?.next().is_some()
+-        {
+-            anyhow::bail!(
+-                "The directory {} exists and is not empty, we cannot symlink it.",
+-                system_dir.display()
+-            );
+-        } else if system_dir.exists() {
+-            if !system_dir.is_symlink() && system_dir.is_dir() {
+-                fs::remove_dir(&system_dir).with_context(|| {
+-                    format!(
+-                        "Error while removing the empty dir at {}",
+-                        system_dir.display()
+-                    )
+-                })?;
+-            } else {
+-                fs::remove_file(&system_dir).with_context(|| {
+-                    format!(
+-                        "Error while removing the symlink at {}",
+-                        system_dir.display()
+-                    )
+-                })?;
+-            }
+-        }
+-
+-        let target = etc_dir(ephemeral).join("systemd").join("system");
+-        create_link(&target, &system_dir).with_context(|| {
+-            format!(
+-                "Error while creating symlink: {} -> {}",
+-                system_dir.display(),
+-                target.display(),
+-            )
+-        })?;
+-    }
+-    Ok(())
+-}
+-
+ pub fn deactivate(old_services: Services) -> ServiceActivationResult {
+     log::debug!("{:?}", old_services);
+ 
+-    restore_ephemeral_system_dir()
++    // If we turned the ephemeral systemd system dir under /run into a symlink,
++    // then systemd crashes when that symlink goes broken.
++    // To avoid this, we always check whether this directory exists and is correct,
++    // and we recreate it if needed.
++    // NOTE: We rely on the fact that the etc files get cleaned up first, before this runs!
++    ensure_ephemeral_runtime_dirs()
+         .map_err(|e| ActivationError::with_partial_result(old_services.clone(), e))?;
+ 
+     // masked units can't be running, skip them
+@@ -294,22 +240,6 @@ pub fn deactivate(old_services: Services) -> ServiceActivationResult {
+     Ok(im::HashMap::new())
+ }
+ 
+-// If we turned the ephemeral systemd system dir under /run into a symlink,
+-// then systemd crashes when that symlink goes broken.
+-// To avoid this, we always check whether this directory exists and is correct,
+-// and we recreate it if needed.
+-// NOTE: We rely on the fact that the etc files get cleaned up first, before this runs!
+-fn restore_ephemeral_system_dir() -> anyhow::Result<()> {
+-    let ephemeral_systemd_system_dir = systemd_system_dir(true);
+-    if !ephemeral_systemd_system_dir.exists() {
+-        if ephemeral_systemd_system_dir.is_symlink() {
+-            fs::remove_file(&ephemeral_systemd_system_dir)?;
+-        }
+-        fs::create_dir_all(&ephemeral_systemd_system_dir)?;
+-    }
+-    Ok(())
+-}
+-
+ fn stop_services<'a, U>(service_manager: &systemd::ServiceManager, units: U) -> HashSet<JobId>
+ where
+     U: AsRef<[&'a str]>,
+@@ -424,7 +354,11 @@ pub fn restart_userborn_if_exists() -> anyhow::Result<()> {
+     // Check if userborn.service exists by listing units matching the pattern
+     let units = service_manager.list_units_by_patterns(&[], &["userborn.service"])?;
+ 
+-    if units.is_empty() {
++    // A disabled userborn that is still referenced is listed as "not-found".
++    if units
++        .iter()
++        .all(|unit| matches!(unit.load_state.as_str(), "not-found" | "masked"))
++    {
+         log::debug!("userborn.service not found, skipping");
+         return Ok(());
+     }
+diff --git a/crates/system-manager-engine/src/activate/tmp_files.rs b/crates/system-manager-engine/src/activate/tmp_files.rs
+index b454347..798bac8 100644
+--- a/crates/system-manager-engine/src/activate/tmp_files.rs
++++ b/crates/system-manager-engine/src/activate/tmp_files.rs
+@@ -9,11 +9,12 @@ type TmpFilesActivationResult = ActivationResult<()>;
+ 
+ pub fn activate(etc_tree: &HashSet<PathBuf>) -> TmpFilesActivationResult {
+     let tmp_files_prefix = PathBuf::from("/etc/tmpfiles.d");
+-    // List and collect managed files under /etc/tmpFiles.d
++    let run_tmp_files_prefix = PathBuf::from("/run/tmpfiles.d");
++    // List and collect managed files under /etc/tmpFiles.d and /run/tmpfiles.d
+     let tmpfiles_conf_files: Vec<&str> = etc_tree
+         .iter()
+         .filter_map(|p| {
+-            if p.starts_with(&tmp_files_prefix) {
++            if p.starts_with(&tmp_files_prefix) || p.starts_with(&run_tmp_files_prefix) {
+                 p.to_str()
+             } else {
+                 None
+diff --git a/crates/system-manager-engine/src/lib.rs b/crates/system-manager-engine/src/lib.rs
+index 5657f8e..0cfbf19 100644
+--- a/crates/system-manager-engine/src/lib.rs
++++ b/crates/system-manager-engine/src/lib.rs
+@@ -4,7 +4,7 @@ pub mod register;
+ mod systemd;
+ pub mod unit_info;
+ 
+-use anyhow::Result;
++use anyhow::{Context, Result};
+ use serde::{Deserialize, Serialize};
+ use std::borrow::Cow;
+ use std::os::unix;
+@@ -155,3 +155,39 @@ pub fn etc_dir(ephemeral: bool) -> PathBuf {
+         PathBuf::from("/etc")
+     }
+ }
++
++// Never replaced: systemctl needs /run/systemd/system to be a directory.
++const EPHEMERAL_RUNTIME_DIRS: [&str; 8] = [
++    "systemd/system",
++    "systemd/user",
++    "systemd/network",
++    "tmpfiles.d",
++    "sysctl.d",
++    "modules-load.d",
++    "binfmt.d",
++    "udev/rules.d",
++];
++
++pub fn etc_target(etc_dir: &Path, rel: &Path) -> PathBuf {
++    if etc_dir == self::etc_dir(true)
++        && EPHEMERAL_RUNTIME_DIRS
++            .iter()
++            .any(|dir| rel.starts_with(dir))
++    {
++        Path::new("/run").join(rel)
++    } else {
++        etc_dir.join(rel)
++    }
++}
++
++pub fn ensure_ephemeral_runtime_dirs() -> Result<()> {
++    for dir in EPHEMERAL_RUNTIME_DIRS {
++        let dir = Path::new("/run").join(dir);
++        if dir.is_symlink() {
++            remove_link(&dir).with_context(|| format!("Error while removing {}", dir.display()))?;
++        }
++        fs::create_dir_all(&dir)
++            .with_context(|| format!("Error while creating {}", dir.display()))?;
++    }
++    Ok(())
++}
+diff --git a/testFlake/container-tests/check-ephemeral-flag.nix b/testFlake/container-tests/check-ephemeral-flag.nix
+new file mode 100644
+index 0000000..9bcf63e
+--- /dev/null
++++ b/testFlake/container-tests/check-ephemeral-flag.nix
+@@ -0,0 +1,62 @@
++{
++  forEachDistro,
++  ...
++}:
++
++forEachDistro "check-ephemeral-flag" {
++  modules = [
++    {
++      environment.etc = {
++        "a/bar" = {
++          text = "bar";
++          mode = "0700";
++          user = "root";
++          group = "root";
++        };
++      };
++      systemd.tmpfiles.rules = [ "d /run/ephemeral-test 0755 root root -" ];
++      systemd.services.ephemeral-test = {
++        wantedBy = [ "system-manager.target" ];
++        serviceConfig = {
++          Type = "oneshot";
++          RemainAfterExit = true;
++        };
++        script = "true";
++      };
++    }
++  ];
++  testScriptFunction =
++    { toplevel, ... }:
++    ''
++      start_all()
++      machine.wait_for_unit("multi-user.target")
++
++      def activate_ephemeral():
++          logs = machine.succeed("${toplevel}/bin/activate --ephemeral 2>&1")
++          for line in logs.split("\n"):
++              assert "ERROR" not in line, line
++          machine.wait_for_unit("system-manager.target")
++
++      machine.succeed("printf '[Service]\\nExecStart=/bin/true\\n' > /run/systemd/system/sentinel.service")
++
++      with subtest("ephemeral activation stays under /run"):
++          activate_ephemeral()
++          assert machine.file("/run/etc/a/bar").contains("bar")
++          machine.fail("test -e /etc/a/bar")
++          machine.succeed("test -L /run/systemd/system/ephemeral-test.service")
++          machine.fail("test -e /etc/systemd/system/ephemeral-test.service")
++          machine.succeed("systemctl is-active ephemeral-test.service")
++          machine.succeed("test -d /run/ephemeral-test")
++
++      with subtest("existing runtime units are kept"):
++          machine.succeed("test -d /run/systemd/system -a ! -L /run/systemd/system")
++          machine.succeed("test -f /run/systemd/system/sentinel.service")
++          machine.succeed("systemctl list-units --no-pager")
++
++      with subtest("a runtime unit dir symlink left by older versions is healed"):
++          machine.succeed("mkdir -p /run/etc/systemd && rm -rf /run/etc/systemd/system && mv /run/systemd/system /run/etc/systemd/system && ln -s /run/etc/systemd/system /run/systemd/system")
++          activate_ephemeral()
++          machine.succeed("test -d /run/systemd/system -a ! -L /run/systemd/system")
++          machine.succeed("systemctl list-units --no-pager")
++    '';
++}
+diff --git a/testFlake/container-tests/dropped-backed-up-files.nix b/testFlake/container-tests/dropped-backed-up-files.nix
+new file mode 100644
+index 0000000..d5e69a7
+--- /dev/null
++++ b/testFlake/container-tests/dropped-backed-up-files.nix
+@@ -0,0 +1,66 @@
++{
++  forEachDistro,
++  system-manager,
++  system,
++  ...
++}:
++
++let
++  configV2 = system-manager.lib.makeSystemConfig {
++    modules = [
++      {
++        nixpkgs.hostPlatform = system;
++        system-manager.allowAnyDistro = true;
++      }
++    ];
++  };
++in
++
++forEachDistro "dropped-backed-up-files" {
++  modules = [
++    {
++      environment.etc = {
++        "replaced-test" = {
++          text = "managed\n";
++          replaceExisting = true;
++        };
++        "replaced-copy-test" = {
++          text = "managed\n";
++          mode = "0644";
++          replaceExisting = true;
++        };
++      };
++    }
++  ];
++  extraPathsToRegister = [ configV2 ];
++  testScriptFunction =
++    { toplevel, ... }:
++    ''
++      start_all()
++      machine.wait_for_unit("multi-user.target")
++
++      machine.succeed("echo -n original > /etc/replaced-test")
++      machine.succeed("echo -n original > /etc/replaced-copy-test")
++
++      with subtest("the entry replaces the original and backs it up"):
++          machine.activate()
++          machine.succeed("test -L /etc/replaced-test")
++          assert machine.succeed("cat /etc/replaced-test.system-manager-backup") == "original"
++          assert machine.succeed("cat /etc/replaced-copy-test") == "managed\n"
++          assert machine.succeed("cat /etc/replaced-copy-test.system-manager-backup") == "original"
++
++      with subtest("dropping the entry restores the original"):
++          machine.activate("${configV2}")
++          machine.succeed("test -f /etc/replaced-test -a ! -L /etc/replaced-test")
++          assert machine.succeed("cat /etc/replaced-test") == "original"
++          machine.fail("test -e /etc/replaced-test.system-manager-backup")
++          assert machine.succeed("cat /etc/replaced-copy-test") == "original"
++          machine.fail("test -e /etc/replaced-copy-test.system-manager-backup")
++
++      with subtest("adding it back backs up the original again"):
++          machine.activate()
++          machine.succeed("test -L /etc/replaced-test")
++          assert machine.succeed("cat /etc/replaced-test.system-manager-backup") == "original"
++          assert machine.succeed("cat /etc/replaced-copy-test.system-manager-backup") == "original"
++    '';
++}
+diff --git a/testFlake/container-tests/tmpfiles-replace-existing.nix b/testFlake/container-tests/tmpfiles-replace-existing.nix
+new file mode 100644
+index 0000000..8a187aa
+--- /dev/null
++++ b/testFlake/container-tests/tmpfiles-replace-existing.nix
+@@ -0,0 +1,27 @@
++{
++  forEachDistro,
++  ...
++}:
++
++forEachDistro "tmpfiles-replace-existing" {
++  modules = [
++    {
++      environment.etc."tmpfiles.d/50-replaced.conf" = {
++        text = "d /run/replaced-test 0755 root root -";
++        replaceExisting = true;
++      };
++    }
++  ];
++  testScriptFunction =
++    { toplevel, ... }:
++    ''
++      start_all()
++      machine.wait_for_unit("multi-user.target")
++
++      machine.succeed("echo '# original' > /etc/tmpfiles.d/50-replaced.conf")
++      machine.activate()
++
++      machine.succeed("test -L /etc/tmpfiles.d/50-replaced.conf")
++      machine.succeed("test -d /run/replaced-test")
++    '';
++}
+diff --git a/testFlake/container-tests/userborn-disabled.nix b/testFlake/container-tests/userborn-disabled.nix
+new file mode 100644
+index 0000000..3636b68
+--- /dev/null
++++ b/testFlake/container-tests/userborn-disabled.nix
+@@ -0,0 +1,25 @@
++{
++  forEachDistro,
++  ...
++}:
++
++# suid-sgid-wrappers is ordered after userborn.service, so systemd lists a
++# disabled userborn as "not-found".
++forEachDistro "userborn-disabled" {
++  modules = [
++    {
++      services.userborn.enable = false;
++    }
++  ];
++  testScriptFunction =
++    { toplevel, ... }:
++    ''
++      start_all()
++      machine.wait_for_unit("multi-user.target")
++
++      logs = machine.succeed("${toplevel}/bin/activate 2>&1")
++      for line in logs.split("\n"):
++          assert "ERROR" not in line, line
++      machine.wait_for_unit("system-manager.target")
++    '';
++}
+-- 
+2.54.0
+

@@ -1,0 +1,47 @@
+diff --git i/internal/cli/prune.go w/internal/cli/prune.go
+index 9734855..e3b8320 100644
+--- i/internal/cli/prune.go
++++ w/internal/cli/prune.go
+@@ -6,7 +6,9 @@ import (
+ 	"io/fs"
+ 	"log/slog"
+ 	"os"
++	"runtime"
+ 	"strings"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/fatih/color"
+@@ -138,14 +140,26 @@ func (c *CLI) permanentlyDeleteByTimeRange(durations []time.Duration) error {
+ 	}
+ 
+ 	// Remove files
+-	var failedDeletions []failedDeletion
++	var (
++		failedDeletions []failedDeletion
++		mu              sync.Mutex
++		wg              sync.WaitGroup
++		sem             = make(chan struct{}, runtime.NumCPU())
++	)
+ 	for _, file := range filesToDelete {
+-		slog.Debug("removing trash file", "file", file.OriginalPath)
+-		if err := c.trash.Remove(file); err != nil {
+-			slog.Error("failed to remove file", "file", file.Name, "error", err)
+-			failedDeletions = append(failedDeletions, failedDeletion{file: file, err: err})
+-		}
++		sem <- struct{}{}
++		wg.Go(func() {
++			defer func() { <-sem }()
++			slog.Debug("removing trash file", "file", file.OriginalPath)
++			if err := c.trash.Remove(file); err != nil {
++				slog.Error("failed to remove file", "file", file.Name, "error", err)
++				mu.Lock()
++				failedDeletions = append(failedDeletions, failedDeletion{file: file, err: err})
++				mu.Unlock()
++			}
++		})
+ 	}
++	wg.Wait()
+ 
+ 	if len(failedDeletions) > 0 {
+ 		printFailedDeletions(failedDeletions)

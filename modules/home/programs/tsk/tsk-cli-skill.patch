@@ -1,0 +1,28 @@
+diff --git a/modules/home/programs/claude/code/plugins/nx/skills/tsk-cli/SKILL.md b/modules/home/programs/claude/code/plugins/nx/skills/tsk-cli/SKILL.md
+index 67b38d14..a3ed7695 100644
+--- a/modules/home/programs/claude/code/plugins/nx/skills/tsk-cli/SKILL.md
++++ b/modules/home/programs/claude/code/plugins/nx/skills/tsk-cli/SKILL.md
+@@ -108,9 +108,9 @@ status they are already in the board's order; keep it.
+ 
+ Only when the user asks.
+ 
+-- **Dispatch:** `tsk dispatch T12`, or `tsk status T12 started` on an assigned task never
+-  dispatched. It launches the assignee's agent in a new worktree and Herdr workspace and sets the
+-  task `started`. Watch it with `herdr agent get t12-<assignee>`.
++- **Dispatch:** do not dispatch on this machine. `tsk dispatch` launches agents only inside Herdr,
++  and agents here run in Rex. Start work with `tsk status T12 started --no-dispatch`, and tell the
++  user when an assigned task needs its agent launched.
+ - `already-dispatched`, or `agent-gone` from a start, means a launch exists. Relaunch with `--again`
+   only when the user wants it.
+ - A `no launch: <reason>` line after a start means the task started but nothing launched (outside
+@@ -135,8 +135,8 @@ Only when the user asks.
+ A refusal prints a stable code first: `tsk status: unknown-task: T12 is not on the board`. Branch on
+ the code, never the message. `tsk help <command>` lists each command's codes. `project`, `trash`,
+ `backup`, and `restore` refuse with a message only. After exit 3 from `dispatch`, or from a start that
+-dispatched, a message saying `the agent may still run` means it may run without its record: check
+-`herdr agent get t12-<assignee>` and read the task before retrying.
++dispatched, a message saying `the agent may still run` means it may run without its record: read
++the task with `tsk list --all --json` and ask the user before retrying.
+ 
+ ## Refine a task
+ 

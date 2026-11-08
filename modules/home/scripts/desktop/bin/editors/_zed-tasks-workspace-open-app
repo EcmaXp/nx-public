@@ -1,0 +1,11 @@
+#!/usr/bin/env fish
+
+if test (count $argv) -eq 0
+    echo "Usage: _zed-tasks-workspace-open-app <app>"
+    exit 1
+end
+
+set APP "$argv[1]"
+set -q ZED_DIRNAME || set ZED_DIRNAME "$PWD"
+
+exec open -a "$APP" "file://$ZED_DIRNAME"

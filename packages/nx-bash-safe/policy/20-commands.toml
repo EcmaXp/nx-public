@@ -1,0 +1,178 @@
+# Hand-maintained; the extract-policy.py generation contract retired 2026-08.
+# Commands that are safe as 'this name, and only these flags'.
+# The table is default-deny: an unknown flag prompts, and a combined short
+# cluster is decomposed letter by letter.
+
+version = 1
+
+[[command]]
+name = "base64"
+kind = "flags"
+table = "-d -D --decode -b:a --break:a -w:a --wrap:a -i:a --input:a --ignore-garbage -h --help --version"
+
+[[command]]
+name = "egrep"
+kind = "flags"
+table = "-e:a --regexp:a -f:a --file:a -F --fixed-strings -G --basic-regexp -E --extended-regexp -P --perl-regexp -i --ignore-case --no-ignore-case -v --invert-match -w --word-regexp -x --line-regexp -c --count --color:a --colour:a -L --files-without-match -l --files-with-matches -m:a --max-count:a -o --only-matching -q --quiet --silent -s --no-messages -b --byte-offset -H --with-filename -h --no-filename --label:a -n --line-number -T --initial-tab -u --unix-byte-offsets -Z --null -z --null-data -A:a --after-context:a -B:a --before-context:a -C:a --context:a --group-separator:a --no-group-separator -a --text --binary-files:a -I -D:a --devices:a -d:a --directories:a --exclude:a --exclude-from:a --exclude-dir:a --include:a -r --recursive -R --dereference-recursive --line-buffered -U --binary --help -V --version"
+
+[[command]]
+name = "fd"
+kind = "flags"
+table = "-h --help -V --version -H --hidden -I --no-ignore --no-ignore-vcs --no-ignore-parent -s --case-sensitive -i --ignore-case -g --glob --regex -F --fixed-strings -a --absolute-path -L --follow -p --full-path -0 --print0 -d:a --max-depth:a --min-depth:a --exact-depth:a -t:a --type:a -e:a --extension:a -S:a --size:a --changed-within:a --changed-before:a -o:a --owner:a -E:a --exclude:a --ignore-file:a -c:a --color:a -j:a --threads:a --max-buffer-time:a --max-results:a -1 -q --quiet --show-errors --strip-cwd-prefix --one-file-system --prune --search-path:a --base-directory:a --path-separator:a --batch-size:a --no-require-git --hyperlink:a --and:a --format:a"
+
+[[command]]
+name = "fdfind"
+kind = "flags"
+table = "-h --help -V --version -H --hidden -I --no-ignore --no-ignore-vcs --no-ignore-parent -s --case-sensitive -i --ignore-case -g --glob --regex -F --fixed-strings -a --absolute-path -L --follow -p --full-path -0 --print0 -d:a --max-depth:a --min-depth:a --exact-depth:a -t:a --type:a -e:a --extension:a -S:a --size:a --changed-within:a --changed-before:a -o:a --owner:a -E:a --exclude:a --ignore-file:a -c:a --color:a -j:a --threads:a --max-buffer-time:a --max-results:a -1 -q --quiet --show-errors --strip-cwd-prefix --one-file-system --prune --search-path:a --base-directory:a --path-separator:a --batch-size:a --no-require-git --hyperlink:a --and:a --format:a"
+
+[[command]]
+name = "fgrep"
+kind = "flags"
+table = "-e:a --regexp:a -f:a --file:a -F --fixed-strings -G --basic-regexp -E --extended-regexp -P --perl-regexp -i --ignore-case --no-ignore-case -v --invert-match -w --word-regexp -x --line-regexp -c --count --color:a --colour:a -L --files-without-match -l --files-with-matches -m:a --max-count:a -o --only-matching -q --quiet --silent -s --no-messages -b --byte-offset -H --with-filename -h --no-filename --label:a -n --line-number -T --initial-tab -u --unix-byte-offsets -Z --null -z --null-data -A:a --after-context:a -B:a --before-context:a -C:a --context:a --group-separator:a --no-group-separator -a --text --binary-files:a -I -D:a --devices:a -d:a --directories:a --exclude:a --exclude-from:a --exclude-dir:a --include:a -r --recursive -R --dereference-recursive --line-buffered -U --binary --help -V --version"
+
+[[command]]
+name = "file"
+kind = "flags"
+table = "--brief -b --mime -i --mime-type --mime-encoding --apple --check-encoding -c --exclude:a --exclude-quiet:a --print0 -0 -F:a --separator:a --help --version -v --no-dereference -h --dereference -L --keep-going -k --list -l --no-buffer -n --preserve-date -p --raw -r -s --special-files"
+
+[[command]]
+name = "grep"
+kind = "flags"
+table = "-e:a --regexp:a -f:a --file:a -F --fixed-strings -G --basic-regexp -E --extended-regexp -P --perl-regexp -i --ignore-case --no-ignore-case -v --invert-match -w --word-regexp -x --line-regexp -c --count --color:a --colour:a -L --files-without-match -l --files-with-matches -m:a --max-count:a -o --only-matching -q --quiet --silent -s --no-messages -b --byte-offset -H --with-filename -h --no-filename --label:a -n --line-number -T --initial-tab -u --unix-byte-offsets -Z --null -z --null-data -A:a --after-context:a -B:a --before-context:a -C:a --context:a --group-separator:a --no-group-separator -a --text --binary-files:a -I -D:a --devices:a -d:a --directories:a --exclude:a --exclude-from:a --exclude-dir:a --include:a -r --recursive -R --dereference-recursive --line-buffered -U --binary --help -V --version"
+
+[[command]]
+name = "md5sum"
+kind = "flags"
+table = "-b --binary -t --text -c --check --ignore-missing --quiet --status --strict -w --warn --tag -z --zero --help --version"
+
+[[command]]
+name = "netstat"
+kind = "flags"
+table = "-a -L -l -n -f:a -g -i -I:a -s -r -m -v"
+
+[[command]]
+name = "pgrep"
+kind = "flags"
+table = "-d:a --delimiter:a -l --list-name -a --list-full -v --inverse -w --lightweight -c --count -f --full -g:a --pgroup:a -G:a --group:a -i --ignore-case -n --newest -o --oldest -O:a --older:a -P:a --parent:a -s:a --session:a -t:a --terminal:a -u:a --euid:a -U:a --uid:a -x --exact -F:a --pidfile:a -L --logpidfile -r:a --runstates:a --ns:a --nslist:a --help -V --version"
+
+[[command]]
+name = "rg"
+kind = "flags"
+table = "-e:a --regexp:a -f:a -i --ignore-case -S --smart-case -F --fixed-strings -w --word-regexp -v --invert-match -c --count -l --files-with-matches --files-without-match -n --line-number -o --only-matching -A:a --after-context:a -B:a --before-context:a -C:a --context:a -H -h --heading --no-heading -q --quiet --column -g:a --glob:a -t:a --type:a -T:a --type-not:a --type-list --hidden --no-ignore -u -m:a --max-count:a -d:a --max-depth:a -a --text -L --follow --color:a --json --stats --help --version --debug --files --sort:a -r:a --replace:a -N --no-line-number -I --no-filename --with-filename -x --line-regexp -s --case-sensitive -U --multiline --multiline-dotall --trim -z --search-zip --no-messages --vimgrep --count-matches -0 --null --null-data -P --pcre2 --no-config -p --pretty --passthru -b --byte-offset --engine:a --encoding:a -E:a --no-ignore-vcs --no-ignore-parent --ignore-file:a --no-require-git --sortr:a"
+
+[[command]]
+name = "sha1sum"
+kind = "flags"
+table = "-b --binary -t --text -c --check --ignore-missing --quiet --status --strict -w --warn --tag -z --zero --help --version"
+
+[[command]]
+name = "sha256sum"
+kind = "flags"
+table = "-b --binary -t --text -c --check --ignore-missing --quiet --status --strict -w --warn --tag -z --zero --help --version"
+
+[[command]]
+name = "sort"
+kind = "flags"
+table = "--ignore-leading-blanks -b --dictionary-order -d --ignore-case -f --general-numeric-sort -g --human-numeric-sort -h --ignore-nonprinting -i --month-sort -M --numeric-sort -n --random-sort -R --reverse -r --sort:a --stable -s --unique -u --version-sort -V --zero-terminated -z --key:a -k:a --field-separator:a -t:a --check -c --check-char-order -C --merge -m --buffer-size:a -S:a --parallel:a --batch-size:a --help --version"
+
+[[command]]
+name = "tree"
+kind = "flags"
+table = "-a -d -l -f -x -L:a -P:a -I:a --gitignore --gitfile:a --ignore-case --matchdirs --metafirst --prune --info --infofile:a --noreport --charset:a --filelimit:a -q -N -Q -p -u -g -s -h --si --du -D --timefmt:a -F --inodes --device -v -t -c -U -r --dirsfirst --filesfirst --sort:a -i -A -S -n -C -X -J -H:a --nolinks --hintro:a --houtro:a -T:a --hyperlink --scheme:a --authority:a --fromfile --fromtabfile --fflinks --help --version"
+
+# Only a +FORMAT positional: anything else is a date to set.
+[[command]]
+name = "date"
+kind = "flags"
+table = "-d:a --date:a -r:a --reference:a -u --utc --universal -I --iso-8601:a -R --rfc-email --rfc-3339:a --debug --help --version"
+positionals = "plus_prefixed"
+
+# A BSD `e` in a short cluster shows the environment of other
+# processes, which leaks their secrets.
+[[command]]
+name = "ps"
+kind = "native"
+matcher = "ps"
+table = "-e -A -a -d -N --deselect -f -F -l -j -y -w -ww --width:a -c -H --forest --headers --no-headers -n:a --sort:a -L -T -m -C:a -G:a -g:a -p:a --pid:a -q:a --quick-pid:a -s:a --sid:a -t:a --tty:a -U:a -u:a --user:a --help --info -V --version"
+
+# The script itself is the risk, not the flags: `w`, `e` and `r`
+# write files or execute. Every script must be an address plus one
+# of p/d/q/= or a substitution.
+[[command]]
+name = "sed"
+kind = "native"
+matcher = "sed"
+table = "--expression:a -e:a --quiet --silent -n --regexp-extended -r --posix -E --line-length:a -l:a --zero-terminated -z --separate -s --unbuffered -u --debug --help --version"
+
+# `env`/`$ENV` read the environment, `include`/`import` and -f/-L
+# load a program from disk.
+[[command]]
+name = "jq"
+kind = "native"
+matcher = "jq"
+
+# Same shape as jq, but the only hard rule is that it must not
+# edit in place.
+[[command]]
+name = "yq"
+kind = "native"
+matcher = "yq"
+
+# find is a read tool with an exec engine bolted on.
+[[command]]
+name = "find"
+kind = "native"
+matcher = "find"
+deny = ["-delete", "-exec", "-execdir", "-files0-from", "-fls", "-ok", "-okdir"]
+
+# Rewrites files in place, so it is allowed only with explicit
+# paths and suppressed under plan mode.
+[[command]]
+name = "treefmt"
+kind = "native"
+matcher = "treefmt"
+
+# With no argument it opens an interactive REPL and the tool call
+# never returns.
+[[command]]
+name = "nslookup"
+kind = "flags"
+table = ""
+positionals = "at_least_one"
+
+# No output-file, exec, or in-place flag exists on this tool.
+[[command]]
+name = "dig"
+kind = "reader"
+
+[[command]]
+name = "host"
+kind = "reader"
+
+[[command]]
+name = "whois"
+kind = "reader"
+
+# Only `-m py_compile` on paths that are provably inside tmp: the
+# __pycache__ it writes lands beside the source, so tmp confines it.
+[[command]]
+name = "python"
+kind = "native"
+matcher = "py_compile"
+
+[[command]]
+name = "python3"
+kind = "native"
+matcher = "py_compile"
+
+[[command]]
+name = "awk"
+kind = "native"
+matcher = "awk"
+table = "-F:a -v:a"
+
+[[command]]
+name = "curl"
+kind = "native"
+matcher = "curl"
+table = "-s --silent -S --show-error -f --fail --fail-with-body -L --location -m:a --max-time:a --connect-timeout:a --retry:a --retry-delay:a --retry-max-time:a -H:a --header:a -I --head -i --include -v --verbose -4 -6 --compressed -w:a --write-out:a -A:a --user-agent:a -e:a --referer:a -G --get --url:a --max-redirs:a --http1.1 --http2 --no-progress-meter -N --no-buffer"

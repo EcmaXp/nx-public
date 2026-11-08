@@ -1,0 +1,172 @@
+# Hand-maintained; the extract-policy.py generation contract retired 2026-08.
+# Commands whose arguments are data, plus the environment rules.
+# A reader may carry an opaque expansion, because there is no flag table
+# for one to smuggle a flag past.
+
+version = 1
+
+readers = [
+  ":",
+  "[",
+  "basename",
+  "break",
+  "cal",
+  "cat",
+  "cmp",
+  "column",
+  "comm",
+  "continue",
+  "cut",
+  "df",
+  "diff",
+  "dig",
+  "dirname",
+  "du",
+  "echo",
+  "expand",
+  "expr",
+  "eza",
+  "false",
+  "fmt",
+  "fold",
+  "free",
+  "groups",
+  "head",
+  "hexdump",
+  "host",
+  "hostname",
+  "id",
+  "locale",
+  "ls",
+  "nl",
+  "nproc",
+  "numfmt",
+  "od",
+  "paste",
+  "pr",
+  "printf",
+  "pwd",
+  "readlink",
+  "realpath",
+  "rev",
+  "seq",
+  "set",
+  "sleep",
+  "stat",
+  "strings",
+  "tac",
+  "tail",
+  "test",
+  "tr",
+  "true",
+  "tsort",
+  "type",
+  "uname",
+  "unexpand",
+  "uniq",
+  "uptime",
+  "wc",
+  "which",
+  "whoami",
+  "whois",
+]
+
+# Shell builtins that count as readers for the expansion rule but are
+# classified by their own branch.
+reader_builtins = ["cd", "export", "unset"]
+
+help_flags = ["--help", "--schema", "--version", "-h"]
+
+# Allowed reasons that mutate project state. Plan mode splits the reason
+# string on ', ' and suppresses the decision if any segment is here, so
+# these strings are an interface and not a label.
+plan_mode_block = ["git fetch", "terraform fmt", "treefmt <paths>"]
+
+# Exported into the child process, so an unlisted name prompts: assigning
+# PATH or GIT_* turns a read-only command into an exec vector.
+safe_assign_vars = [
+  "AWS_DEFAULT_REGION",
+  "AWS_PROFILE",
+  "AWS_REGION",
+  "BLOCKSIZE",
+  "BLOCK_SIZE",
+  "CGO_ENABLED",
+  "CHARSET",
+  "CI",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "COLORTERM",
+  "COLUMNS",
+  "DEBIAN_FRONTEND",
+  "FORCE_COLOR",
+  "GCC_COLORS",
+  "GIT_TERMINAL_PROMPT",
+  "GO111MODULE",
+  "GOARCH",
+  "GOEXPERIMENT",
+  "GOFLAGS",
+  "GOOS",
+  "GREP_COLOR",
+  "GREP_COLORS",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_TIME",
+  "LINES",
+  "LSCOLORS",
+  "LS_COLORS",
+  "MISE_TRUSTED_CONFIG_PATHS",
+  "NODE_ENV",
+  "NO_COLOR",
+  "NX_CACHE_DIR",
+  "PYTEST_DEBUG",
+  "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+  "PYTHONDONTWRITEBYTECODE",
+  "PYTHONUNBUFFERED",
+  "RUST_BACKTRACE",
+  "RUST_LOG",
+  "TERM",
+  "TIME_STYLE",
+  "TZ",
+]
+
+# Bare assignments are shell-local and never exported, so only names that
+# change the shell's own behavior or our trusted expansions are refused.
+shell_critical_vars = [
+  "BASHOPTS",
+  "BASH_ENV",
+  "CDPATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "ENV",
+  "FPATH",
+  "GLOBIGNORE",
+  "HOME",
+  "IFS",
+  "LD_LIBRARY_PATH",
+  "LD_PRELOAD",
+  "PATH",
+  "PROMPT_COMMAND",
+  "PS0",
+  "PS1",
+  "PS2",
+  "PS3",
+  "PS4",
+  "SCRATCHPAD",
+  "SHELL",
+  "SHELLOPTS",
+  "TMPDIR",
+  "ZDOTDIR",
+]
+
+[[command]]
+name = "command"
+kind = "flags"
+table = "-v -V"
+
+[[command]]
+name = "read"
+kind = "native"
+matcher = "read_builtin"
+table = "-r -s -a -d:a -n:a -N:a -t:a -u:a -p:a"

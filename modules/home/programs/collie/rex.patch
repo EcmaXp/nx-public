@@ -1,0 +1,2106 @@
+diff --git a/bridge/config-schema.ts b/bridge/config-schema.ts
+index 694d5841..cc4dc7b7 100644
+--- a/bridge/config-schema.ts
++++ b/bridge/config-schema.ts
+@@ -366,7 +366,7 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
+     section: "mux",
+     kind: "string",
+     default: DEFAULT_MUX,
+-    doc: "Which multiplexer this collie mirrors: herdr, tern, tmux, zellij, tuios or durable.",
++    doc: "Which multiplexer this collie mirrors: herdr, herdr-core, rex, tern, tmux, zellij, tuios or durable.",
+     configField: "mux",
+   },
+   {
+@@ -406,6 +406,15 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
+     doc: "Absolute path to the tern binary, when it sits somewhere unusual.",
+     configField: "ternBin",
+   },
++  {
++    key: "rex_bin",
++    env: "COLLIE_REX_BIN",
++    section: "mux",
++    kind: "string",
++    default: "",
++    doc: "Absolute path to the rex binary, when it sits somewhere unusual.",
++    configField: "rexBin",
++  },
+   {
+     key: "zellij_bin",
+     env: "COLLIE_ZELLIJ_BIN",
+@@ -442,6 +451,15 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
+     doc: "The tern daemon socket to drive. Empty takes the socket tern itself uses.",
+     configField: "muxEndpoint",
+   },
++  {
++    key: "mux_endpoint_rex",
++    env: "COLLIE_MUX_ENDPOINT_REX",
++    section: "mux",
++    kind: "string",
++    default: "",
++    doc: "The Rex server socket to drive, as an absolute path. Empty takes the socket rex itself uses.",
++    configField: "muxEndpoint",
++  },
+   {
+     key: "programs",
+     env: "COLLIE_PROGRAMS",
+diff --git a/bridge/config.ts b/bridge/config.ts
+index ff68d969..51486441 100644
+--- a/bridge/config.ts
++++ b/bridge/config.ts
+@@ -215,6 +215,7 @@ export interface Config {
+    * (`bridge/mux/tern/exec.ts`). Set via `COLLIE_TERN_BIN`. Inert unless {@link mux} is `tern`.
+    */
+   ternBin: string;
++  rexBin: string;
+   /** Path to Herdr's control socket. A non-Herdr-launched daemon must discover this itself. */
+   socketPath: string;
+   /**
+@@ -790,6 +791,7 @@ export function loadConfig(
+     tmuxBin: (env.COLLIE_TMUX_BIN ?? "").trim(),
+     zellijBin: (env.COLLIE_ZELLIJ_BIN ?? "").trim(),
+     ternBin: (env.COLLIE_TERN_BIN ?? "").trim(),
++    rexBin: (env.COLLIE_REX_BIN ?? "").trim(),
+     socketPath,
+     dialMode: envEnum("COLLIE_HERDR_DIAL", ["auto", "net", "bun"] as const, "auto", env),
+     port: envInt("COLLIE_PORT", DEFAULT_PORT, { min: 1, max: 65535 }, env),
+diff --git a/bridge/index.ts b/bridge/index.ts
+index 8a6a9d61..0dc5ce16 100644
+--- a/bridge/index.ts
++++ b/bridge/index.ts
+@@ -41,7 +41,7 @@ import {
+   privateRoot,
+   type PrivateRoot,
+ } from "./owner-only.ts";
+-import type { AgentView, CrewMode, CrewStatusResponse, Launcher } from "./types.ts";
++import type { AgentStatus, AgentView, CrewMode, CrewStatusResponse, Launcher } from "./types.ts";
+ import { EventPoker } from "./event-poker.ts";
+ import { durableLogDir, moveFlatLogs, sourceLogDir } from "./durable/log.ts";
+ import { GitHeads, nodeGitHeadDisk } from "./git-head.ts";
+@@ -67,6 +67,7 @@ import {
+   factoryFor,
+   type MuxTarget,
+ } from "./mux/registry.ts";
++import { REX_BINARY_OPTION, REX_CLAUDE_ROOTS_OPTION } from "./mux/rex/adapter.ts";
+ import { TERN_BINARY_OPTION } from "./mux/tern/adapter.ts";
+ import { TMUX_BINARY_OPTION } from "./mux/tmux/adapter.ts";
+ import type { MuxAdapter } from "./mux/types.ts";
+@@ -216,7 +217,7 @@ import {
+ } from "./sessions.ts";
+ import { bootSources, ENV_SOURCE_NAME, planPrograms, PROGRAMS_OFF_LOG, programsOff, sourcesPath, sourceTransportEnv, type DurableSource, type ProgramPlan } from "./sources.ts";
+ import { Snooze } from "./snooze.ts";
+-import { StateEngine } from "./state-engine.ts";
++import { StateEngine, UNWATCHED_POLL_MS } from "./state-engine.ts";
+ import { SubagentTracker } from "./subagents.ts";
+ import { TodoTracker } from "./todos.ts";
+ import { diskUsageFiles, usageDir, UsageTracker } from "./usage.ts";
+@@ -1437,6 +1438,8 @@ function terminalAdapter(socketPath: string): BuiltAdapter {
+       [TMUX_BINARY_OPTION]: cfg.tmuxBin,
+       [ZELLIJ_BINARY_OPTION]: cfg.zellijBin,
+       [TERN_BINARY_OPTION]: cfg.ternBin,
++      [REX_BINARY_OPTION]: cfg.rexBin,
++      [REX_CLAUDE_ROOTS_OPTION]: cfg.journalRoots.claude.join("\n"),
+     },
+   };
+   return { adapter: createMux(muxRegistry, cfg.mux, target), target };
+@@ -1543,7 +1546,7 @@ const makeSession: SessionFactory = (name, endpoint, isPrimary) => {
+   // The worktree capability sits just inside it, outside the beacon and hint wrappers: it reads their
+   // declaration and lifts `createWorktree` from `createSpace` plus git (bridge/worktree-capability.ts).
+   const herdr = withRepoFacts(withWorktreeCapability(withBeaconsIfBlind(built.adapter, target), { git: worktreeGit }), { facts: (folder) => repoFactsOf(folder, nodeGitHeadDisk, homedir()) });
+-  const engine = new StateEngine(herdr, cfg.pollMs, { museSessionName: museNames });
++  const engine = new StateEngine(herdr, cfg.pollMs, { museSessionName: museNames, unwatchedPollMs: UNWATCHED_POLL_MS });
+ 
+   // Event-poked polling: a long-lived watch on the multiplexer pokes an immediate re-poll on any
+   // herd change, and while it's healthy the interval relaxes to the safety-net cadence. Events are
+@@ -1551,8 +1554,7 @@ const makeSession: SessionFactory = (name, endpoint, isPrimary) => {
+   // not correctness. The fresh snapshot after any pane lifecycle change re-scopes the watch.
+   // `attention` rides through the poker to the adapter's watch: an adapter that CENSUSES for topology
+   // (zellij) tightens its cadence while a phone is plainly reading this collie, and one that pushes
+-  // ignores it entirely. The bridge's own poll cadence is NOT touched by this — that stays the
+-  // event-health question two lines below.
++  // ignores it entirely.
+   const poker = new EventPoker(herdr, { attention: () => engine.attention() });
+   poker.onPoke(() => engine.pokeNow());
+   poker.onHealth((h) => engine.setCadence(h ? cfg.pollIdleMs : cfg.pollMs));
+@@ -1694,8 +1696,13 @@ const makeSession: SessionFactory = (name, endpoint, isPrimary) => {
+   // phone and in the push, also where the multiplexer says `working` (herdr-core with pi's question).
+   if (surface !== undefined) engine.liftScreenAsks((paneId) => surface.askOnScreen(paneId));
+   if (surface !== undefined) {
++    let surfaceStatus = new Map<string, AgentStatus>();
+     engine.onUpdate((s) => {
+-      void surface.observe(s.agents).then(() => {
++      const unwatched = engine.unwatched();
++      const read = s.agents.filter((agent) => !unwatched || surfaceStatus.get(agent.paneId) !== agent.status);
++      surfaceStatus = new Map(s.agents.map((agent) => [agent.paneId, agent.status]));
++      void surface.observe(s.agents, (agent) => read.includes(agent)).then(() => {
++        if (unwatched && read.some((agent) => agent.status !== "blocked" && surface.askOnScreen(agent.paneId))) engine.pokeNow();
+         // A pane where an agent is starting: once the poll's read finds its input box, the launch window
+         // ends, unless a send's probe already went unseen in that box (it is drawn but reads no keys).
+         for (const agent of s.agents) {
+diff --git a/bridge/journal/claude-pid.ts b/bridge/journal/claude-pid.ts
+new file mode 100644
+index 00000000..d261e599
+--- /dev/null
++++ b/bridge/journal/claude-pid.ts
+@@ -0,0 +1,104 @@
++import { readFile } from "node:fs/promises";
++import { join } from "node:path";
++
++import { asJsonNumber, asJsonObject, asJsonString, parseJson } from "../../web/src/lib/json.ts";
++import { claudeConfigDir } from "../claude-commands.ts";
++import { isSessionId } from "./claude.ts";
++import type { AgentSessionRef } from "./types.ts";
++
++const CLAUDE_PID_RECORDS_SUBDIR = "sessions";
++
++const VERDICT_MEMO_LIMIT = 256;
++const PS_TIMEOUT_MS = 2000;
++
++export interface ClaudePidRecord {
++  readonly sessionId: string;
++  readonly procStart: string;
++}
++
++export type ProcessStartOf = (pid: number) => Promise<string | null>;
++
++export type ReadText = (path: string) => Promise<string | null>;
++
++export function claudePidRecordDirs(projectRoots: readonly string[], home: string): string[] {
++  const roots = projectRoots.map((root) => root.trim()).filter((root) => root !== "");
++  return [...new Set(roots.map((root) => join(claudeConfigDir([root], home), CLAUDE_PID_RECORDS_SUBDIR)))];
++}
++
++function isProcessId(pid: number): boolean {
++  return Number.isSafeInteger(pid) && pid > 0;
++}
++
++export function normalizeProcessStart(text: string): string {
++  return text.trim().split(/\s+/u).join(" ");
++}
++
++export function parseClaudePidRecord(text: string, pid: number): ClaudePidRecord | null {
++  const record = asJsonObject(parseJson(text));
++  if (record === undefined || asJsonNumber(record.pid) !== pid) return null;
++  const sessionId = asJsonString(record.sessionId);
++  const procStart = normalizeProcessStart(asJsonString(record.procStart) ?? "");
++  if (sessionId === undefined || !isSessionId(sessionId) || procStart === "") return null;
++  return { sessionId, procStart };
++}
++
++export async function processStartUtc(pid: number): Promise<string | null> {
++  if (!isProcessId(pid)) return null;
++  try {
++    const child = Bun.spawn(["ps", "-o", "lstart=", "-p", String(pid)], {
++      stdin: "ignore",
++      stdout: "pipe",
++      stderr: "ignore",
++      env: { ...process.env, TZ: "UTC", LC_ALL: "C" },
++    });
++    const timer = setTimeout(() => child.kill("SIGKILL"), PS_TIMEOUT_MS);
++    try {
++      const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
++      const start = normalizeProcessStart(text);
++      return code === 0 && start !== "" ? start : null;
++    } finally {
++      clearTimeout(timer);
++    }
++  } catch {
++    return null;
++  }
++}
++
++async function readTextOrNull(path: string): Promise<string | null> {
++  try {
++    return await readFile(path, "utf8");
++  } catch {
++    return null;
++  }
++}
++
++export class ClaudePidSessions {
++  private readonly verdicts = new Map<string, boolean>();
++
++  constructor(
++    private readonly dirs: readonly string[],
++    private readonly startOf: ProcessStartOf = processStartUtc,
++    private readonly read: ReadText = readTextOrNull,
++  ) {}
++
++  async sessionFor(pid: number): Promise<AgentSessionRef | null> {
++    if (!isProcessId(pid)) return null;
++    for (const dir of this.dirs) {
++      const text = await this.read(join(dir, `${String(pid)}.json`));
++      const record = text === null ? null : parseClaudePidRecord(text, pid);
++      if (record !== null && (await this.startedAt(pid, record.procStart))) return { kind: "id", value: record.sessionId };
++    }
++    return null;
++  }
++
++  private async startedAt(pid: number, procStart: string): Promise<boolean> {
++    const key = `${String(pid)} ${procStart}`;
++    const known = this.verdicts.get(key);
++    if (known !== undefined) return known;
++    const actual = await this.startOf(pid);
++    if (actual === null) return false;
++    if (this.verdicts.size >= VERDICT_MEMO_LIMIT) this.verdicts.clear();
++    this.verdicts.set(key, actual === procStart);
++    return actual === procStart;
++  }
++}
+diff --git a/bridge/journal/claude.ts b/bridge/journal/claude.ts
+index 41f832af..5e985974 100644
+--- a/bridge/journal/claude.ts
++++ b/bridge/journal/claude.ts
+@@ -27,7 +27,7 @@
+ // Claude writes when a session is compacted.
+ 
+ import { readdir, stat } from "node:fs/promises";
+-import { dirname, join } from "node:path";
++import { basename, dirname, join } from "node:path";
+ 
+ import { observedClaim, type Sourced } from "../cache/claims.ts";
+ import type { CacheProbe, ChoiceOnly } from "../cache/engine.ts";
+@@ -334,6 +334,8 @@ type RawRow = JsonObject;
+ /** What {@link ClaudeTranscriptSource.followContinuation} compares candidate siblings against. */
+ type LogStamp = { root: string | null; size: number; mtimeMs: number };
+ 
++type IndexedLog = { ino: number; size: number; root: string | null };
++
+ /**
+  * Parse a Claude session log into oldest-first turns.
+  *
+@@ -1121,6 +1123,8 @@ export class ClaudeTranscriptSource implements TranscriptSource {
+    */
+   private readonly handOvers = new Map<string, { size: number; mtimeMs: number; next: string | null }>();
+ 
++  private readonly logIndex = new Map<string, { mtimeMs: number; logs: Map<string, IndexedLog> }>();
++
+   private readonly roots: string[];
+ 
+   constructor(roots: string | readonly string[]) {
+@@ -1323,35 +1327,32 @@ export class ClaudeTranscriptSource implements TranscriptSource {
+   private async followContinuation(path: string, root: string): Promise<string> {
+     const dir = dirname(path);
+     let self: LogStamp;
++    let logs: Map<string, IndexedLog> | null;
+     try {
+       const st = await stat(path);
+-      self = { root: conversationRoot(await head(path)), size: st.size, mtimeMs: st.mtimeMs };
++      logs = await this.indexedLogs(dir, root);
++      const indexed = logs?.get(basename(path));
++      const selfRoot = indexed !== undefined && indexed.ino === st.ino && indexed.root !== null ? indexed.root : conversationRoot(await head(path));
++      self = { root: selfRoot, size: st.size, mtimeMs: st.mtimeMs };
+     } catch {
+       return path;
+     }
+-    if (self.root === null) return path;
++    if (self.root === null || logs === null) return path;
+ 
+     let best = { path, size: self.size, mtimeMs: self.mtimeMs };
+-    let names: string[];
+-    try {
+-      names = await readdir(dir);
+-    } catch {
+-      return path;
+-    }
+-    for (const name of names) {
+-      if (!name.endsWith(".jsonl")) continue;
++    for (const [name, log] of logs) {
++      if (log.root !== self.root) continue;
+       const candidate = join(dir, name);
+       if (candidate === path) continue;
+       try {
+         const st = await stat(candidate);
+-        if (st.mtimeMs <= best.mtimeMs || st.size < self.size) continue;
++        if (st.ino !== log.ino || st.mtimeMs <= best.mtimeMs || st.size < self.size) continue;
+         // Containment AGAIN, before a byte of the candidate is read. The directory got here from a
+         // path `resolve` already validated, but a sibling INSIDE it can still be a symlink out of the
+         // root — and anything that writes into the projects tree can plant one. Following it would
+         // read a file the journal never owned, which is exactly what files.ts promises it can't.
+         const real = await containedRealpath(candidate, root);
+         if (real === null) continue;
+-        if (conversationRoot(await head(real)) !== self.root) continue;
+         // A log that ends in a hand-over is dead by its own account, however new and big it looks: the
+         // old process goes on appending to it after the move, which is exactly what made this
+         // heuristic walk back into it from the live log.
+@@ -1364,6 +1365,47 @@ export class ClaudeTranscriptSource implements TranscriptSource {
+     return best.path;
+   }
+ 
++  private async indexedLogs(dir: string, root: string): Promise<Map<string, IndexedLog> | null> {
++    let dirMtime: number;
++    try {
++      dirMtime = (await stat(dir)).mtimeMs;
++    } catch {
++      return null;
++    }
++    const known = this.logIndex.get(dir);
++    if (known !== undefined && known.mtimeMs === dirMtime) {
++      for (const [name, log] of known.logs) {
++        if (log.root === null) known.logs.set(name, await this.indexLog(dir, name, root, log));
++      }
++      return known.logs;
++    }
++    let names: string[];
++    try {
++      names = await readdir(dir);
++    } catch {
++      return null;
++    }
++    const logs = new Map<string, IndexedLog>();
++    for (const name of names) {
++      if (name.endsWith(".jsonl")) logs.set(name, await this.indexLog(dir, name, root, known?.logs.get(name)));
++    }
++    this.logIndex.set(dir, { mtimeMs: dirMtime, logs });
++    return logs;
++  }
++
++  private async indexLog(dir: string, name: string, root: string, prev: IndexedLog | undefined): Promise<IndexedLog> {
++    const candidate = join(dir, name);
++    try {
++      const st = await stat(candidate);
++      if (prev !== undefined && prev.ino === st.ino && (prev.root !== null || prev.size === st.size)) return prev;
++      const real = await containedRealpath(candidate, root);
++      const logRoot = real === null ? null : conversationRoot(await head(real));
++      return { ino: st.ino, size: st.size, root: logRoot };
++    } catch {
++      return { ino: -1, size: -1, root: null };
++    }
++  }
++
+   stat = statFile;
+ 
+   load = loadTail;
+diff --git a/bridge/mux/registry.ts b/bridge/mux/registry.ts
+index 69f45938..3e90c9bc 100644
+--- a/bridge/mux/registry.ts
++++ b/bridge/mux/registry.ts
+@@ -23,6 +23,7 @@ import type { HostCandidate, HostProbe } from "./host-candidates.ts";
+ import { durableMuxFactory } from "./durable/adapter.ts";
+ import { herdrMuxFactory } from "./herdr/adapter.ts";
+ import { herdrCoreMuxFactory } from "./herdr-core/adapter.ts";
++import { rexMuxFactory } from "./rex/adapter.ts";
+ import { ternMuxFactory } from "./tern/adapter.ts";
+ import { tmuxMuxFactory } from "./tmux/adapter.ts";
+ import { tuiosMuxFactory } from "./tuios/adapter.ts";
+@@ -111,7 +112,7 @@ export interface MuxAdapterFactory {
+  * Deliberately a list of factories and not a map — the map is derived below, so a key can never
+  * drift from the factory it points at.
+  */
+-export const MUX_ADAPTERS: readonly MuxAdapterFactory[] = [herdrMuxFactory, ternMuxFactory, tmuxMuxFactory, zellijMuxFactory, tuiosMuxFactory, durableMuxFactory, herdrCoreMuxFactory];
++export const MUX_ADAPTERS: readonly MuxAdapterFactory[] = [herdrMuxFactory, ternMuxFactory, tmuxMuxFactory, zellijMuxFactory, tuiosMuxFactory, durableMuxFactory, herdrCoreMuxFactory, rexMuxFactory];
+ 
+ /** One provider's answer, tagged with the multiplexer it came from — the row's source. */
+ export interface MuxHostCandidates {
+diff --git a/bridge/mux/rex/adapter.ts b/bridge/mux/rex/adapter.ts
+new file mode 100644
+index 00000000..7a3aa427
+--- /dev/null
++++ b/bridge/mux/rex/adapter.ts
+@@ -0,0 +1,315 @@
++import { homedir } from "node:os";
++
++import { stripSgr } from "../../../web/src/lib/surface/plain.ts";
++import { ClaudePidSessions, claudePidRecordDirs } from "../../journal/claude-pid.ts";
++import type { AgentSessionRef, ForegroundProcess } from "../../journal/types.ts";
++import { declareCapabilities } from "../capabilities.ts";
++import type { MuxAdapterFactory, MuxTarget } from "../registry.ts";
++import {
++  muxAck,
++  muxOk,
++  muxRefused,
++  muxUnsupported,
++  requestedCwd,
++  type MuxAck,
++  type MuxAdapter,
++  type MuxCreatedPane,
++  type MuxGrid,
++  type MuxGridRequest,
++  type MuxOutcome,
++  type MuxRefusalOutcome,
++  type MuxSession,
++  type MuxSnapshot,
++  type MuxSpaceRequest,
++  type MuxSubscription,
++  type MuxTabRequest,
++  type MuxWatchOptions,
++} from "../types.ts";
++import { NO_BINARY_CODE, resolveRexBinary, SpawnRexExec, type RexExec } from "./exec.ts";
++import { toRexKey, REX_UNSENDABLE_KEYS } from "./keys.ts";
++import { gridRows, sessionPids, toSnapshot } from "./layout.ts";
++import { REX_LOGO_SVG } from "./logo.ts";
++import type { JsonValue } from "../../json.ts";
++import {
++  decodeCreatedWindow,
++  decodeProcess,
++  decodeSnapshot,
++  decodeTail,
++  MAX_LABEL_CHARS,
++  MAX_WRITE_JSON_BYTES,
++  parseAnswer,
++  rexScript,
++  type RexOp,
++  type RexProcessEntry,
++  type RexRawSnapshot,
++} from "./protocol.ts";
++import { refusalForAnswer, refusalForRun } from "./refusal.ts";
++import { RexWatch } from "./watch.ts";
++
++export const REX_MUX = "rex";
++
++export const REX_BINARY_OPTION = "rexBin";
++
++export const REX_CLAUDE_ROOTS_OPTION = "claudeRoots";
++
++export interface RexSessionLookup {
++  sessionFor(pid: number): Promise<AgentSessionRef | null>;
++}
++
++export const DEFAULT_REX_TIMEOUT_MS = 5000;
++
++const VIEWPORT_BYTES = 64 * 1024;
++const MIN_RECENT_BYTES = 64 * 1024;
++const MAX_RECENT_BYTES = 1024 * 1024;
++const BYTES_PER_LINE = 512;
++const DEFAULT_ROWS = 24;
++
++function labelRefusal(kind: "block" | "window", label: string): MuxRefusalOutcome | null {
++  return [...label].length > MAX_LABEL_CHARS ? muxRefused(`Rex takes a ${kind} label of at most ${String(MAX_LABEL_CHARS)} characters`) : null;
++}
++
++interface RevisionEntry {
++  revision: number;
++  lastScreen: string;
++}
++
++export class RexMux implements MuxAdapter {
++  readonly mux = REX_MUX;
++  readonly logo = REX_LOGO_SVG;
++
++  readonly capabilities = declareCapabilities({
++    supports: [
++      "paneGrid",
++      "gridScrollback",
++      "agentDetection",
++      "agentSessionRef",
++      "typeText",
++      "sendKeys",
++      "renamePane",
++      "closePane",
++      "createTab",
++      "renameTab",
++      "closeTab",
++      "pushTopologyEvents",
++      "pushPaneEvents",
++    ],
++    spaces: "many",
++    topologyLatency: { kind: "push" },
++    unsupportedKeys: [...REX_UNSENDABLE_KEYS],
++  });
++
++  private readonly revisions = new Map<string, RevisionEntry>();
++
++  constructor(
++    private readonly exec: RexExec,
++    private readonly sessions?: RexSessionLookup,
++  ) {}
++
++  async reachable(): Promise<boolean> {
++    try {
++      return (await this.attempt({ op: "census" })).ok;
++    } catch {
++      return false;
++    }
++  }
++
++  async snapshot(): Promise<MuxSnapshot> {
++    const read = await this.attempt({ op: "snapshot" });
++    if (!read.ok) throw new Error(read.reason === "unreachable" ? read.detail : `failed to read the Rex snapshot: ${read.detail}`);
++    const raw = decodeSnapshot(read.value);
++    const snapshot = toSnapshot(raw, await this.sessionRefs(raw));
++    this.forgetGonePanes(snapshot);
++    return snapshot;
++  }
++
++  private async sessionRefs(raw: RexRawSnapshot): Promise<Map<string, AgentSessionRef>> {
++    const refs = new Map<string, AgentSessionRef>();
++    const sessions = this.sessions;
++    if (sessions === undefined) return refs;
++    await Promise.all(
++      [...sessionPids(raw)].map(async ([blockId, pid]) => {
++        const ref = await sessions.sessionFor(pid).catch(() => null);
++        if (ref !== null) refs.set(blockId, ref);
++      }),
++    );
++    return refs;
++  }
++
++  async refresh(): Promise<void> {
++    return Promise.resolve();
++  }
++
++  async readGrid(paneId: string, request: MuxGridRequest): Promise<MuxOutcome<MuxGrid>> {
++    const lines = Math.max(1, request.lines);
++    const bytes = request.scope === "viewport" ? VIEWPORT_BYTES : Math.min(MAX_RECENT_BYTES, Math.max(MIN_RECENT_BYTES, lines * BYTES_PER_LINE));
++    const read = await this.attempt({ op: "tail", block: paneId, format: "vt", bytes });
++    if (!read.ok) return read;
++    const tail = decodeTail(read.value);
++    const { rows, cutAbove } = gridRows(tail.content, tail.start);
++    const screenRows = rows.slice(-Math.max(1, tail.rows || DEFAULT_ROWS));
++    const source = request.scope === "viewport" ? screenRows : rows;
++    const kept = source.slice(-lines);
++    return muxOk({
++      paneId,
++      text: request.styling === "preserve" ? kept.join("\n") : stripSgr(kept.join("\n")),
++      truncated: cutAbove || source.length > kept.length,
++      revision: this.revisionFor(paneId, stripSgr(screenRows.join("\n"))),
++    });
++  }
++
++  async foregroundProcesses(paneId: string): Promise<MuxOutcome<readonly ForegroundProcess[]>> {
++    const read = await this.attempt({ op: "process", block: paneId });
++    if (!read.ok) return read;
++    const process = decodeProcess(read.value);
++    const entries: RexProcessEntry[] = [];
++    if (process?.foreground) entries.push(process.foreground);
++    entries.push(...(process?.ancestors ?? []));
++    return muxOk(entries.map((entry) => ({ argv: [entry.script || entry.argv0 || entry.name], pid: entry.pid })));
++  }
++
++  async typeText(paneId: string, text: string): Promise<MuxAck> {
++    if (text.length === 0) return muxAck();
++    const encoded = Buffer.byteLength(JSON.stringify(text), "utf8");
++    if (encoded > MAX_WRITE_JSON_BYTES) {
++      return muxRefused(
++        `Rex takes at most ${String(MAX_WRITE_JSON_BYTES)} bytes of encoded text in one request, and this message is ${String(encoded)}`,
++      );
++    }
++    const sent = await this.attempt({ op: "write", block: paneId, text, paste: /[\r\n]/u.test(text) }, { write: true });
++    return sent.ok ? muxAck() : sent;
++  }
++
++  async writeKeys(paneId: string, keys: readonly string[]): Promise<MuxAck> {
++    if (keys.length === 0) return muxAck();
++    const translated: string[] = [];
++    for (const key of keys) {
++      const res = toRexKey(key);
++      if (!res.ok) {
++        if (res.reason === "meta") return muxRefused("Rex cannot send meta chords: a terminal does not receive Super or Command");
++        if (res.reason === "character") return muxRefused(`Rex sends keys on a US layout and has no key for ${key}; type it as text instead`);
++        return muxRefused(`Rex cannot send key: ${key}`);
++      }
++      translated.push(res.key);
++    }
++    const res = await this.runCli(["send-key", "-b", paneId, "--", ...translated], { write: true });
++    return res.ok ? muxAck() : res;
++  }
++
++  async renamePane(paneId: string, label: string | null): Promise<MuxAck> {
++    const next = label?.trim() ?? "";
++    const refused = labelRefusal("block", next);
++    if (refused !== null) return refused;
++    const res = await this.attempt({ op: "label_block", block: paneId, label: next });
++    return res.ok ? muxAck() : res;
++  }
++
++  async closePane(paneId: string): Promise<MuxAck> {
++    const res = await this.attempt({ op: "close_block", block: paneId });
++    return res.ok ? muxAck() : res;
++  }
++
++  async setFocus(_paneId: string): Promise<MuxAck> {
++    return muxUnsupported(
++      "setFocus",
++      "Rex reports which sessions an app attaches, not which one it shows, so Collie cannot confirm the pane it would focus is the one on the screen",
++    );
++  }
++
++  async createTab(request: MuxTabRequest): Promise<MuxOutcome<MuxCreatedPane>> {
++    const label = request.label?.trim() ?? "";
++    const refused = labelRefusal("window", label);
++    if (refused !== null) return refused;
++    const args = ["window", "new", "-s", request.spaceId, "--focus=false", "--json"];
++    const cwd = requestedCwd(request.cwd);
++    if (cwd) args.push("-c", cwd);
++    const created = await this.runCli(args);
++    if (!created.ok) return created;
++    const window = decodeCreatedWindow(created.value);
++    const paneId = window?.blockIds[0];
++    if (window === null || paneId === undefined) return muxRefused("Rex made a window and did not name it and its block");
++    if (label) await this.attempt({ op: "label_window", window: window.windowId, label });
++    const looked = await this.attempt({ op: "snapshot" });
++    const pane = looked.ok ? toSnapshot(decodeSnapshot(looked.value)).panes.find((p) => p.paneId === paneId) : undefined;
++    return muxOk({
++      paneId,
++      spaceId: request.spaceId,
++      spaceLabel: pane?.spaceLabel ?? "",
++      tabId: window.windowId,
++      cwd: pane?.cwd || cwd || "",
++    });
++  }
++
++  async renameTab(tabId: string, label: string): Promise<MuxAck> {
++    const next = label.trim();
++    const refused = labelRefusal("window", next);
++    if (refused !== null) return refused;
++    const res = await this.attempt({ op: "label_window", window: tabId, label: next });
++    return res.ok ? muxAck() : res;
++  }
++
++  async closeTab(tabId: string): Promise<MuxAck> {
++    const res = await this.attempt({ op: "close_window", window: tabId });
++    return res.ok ? muxAck() : res;
++  }
++
++  async createSpace(_request: MuxSpaceRequest): Promise<MuxOutcome<MuxCreatedPane>> {
++    return muxUnsupported("createSpace", "a new Rex session joins the app's sidebar, which Collie does not move");
++  }
++
++  async listSessions(): Promise<MuxOutcome<readonly MuxSession[]>> {
++    return muxUnsupported("listSessions", "every Rex session is already a space of this server");
++  }
++
++  watch(options: MuxWatchOptions): MuxSubscription {
++    return new RexWatch(this.exec, options);
++  }
++
++  private async attempt(op: RexOp, opts: { readonly write?: boolean } = {}): Promise<MuxOutcome<JsonValue>> {
++    const ran = await this.runCli(["do", "-"], opts, rexScript(op));
++    if (!ran.ok) return ran;
++    const answer = parseAnswer(ran.value);
++    if (answer === null) return muxRefused(`Rex answered with something that is not the program's output: ${ran.value.slice(0, 200)}`);
++    return answer.ok ? muxOk(answer.value) : refusalForAnswer(answer.error, opts);
++  }
++
++  private async runCli(args: readonly string[], opts: { readonly write?: boolean } = {}, stdin?: string): Promise<MuxOutcome<string>> {
++    let result;
++    try {
++      result = await this.exec.run(args, stdin);
++    } catch (err) {
++      return refusalForRun(NO_BINARY_CODE, err instanceof Error ? err.message : String(err));
++    }
++    return result.code === 0 ? muxOk(result.stdout) : refusalForRun(result.code, result.stderr, opts);
++  }
++
++  private revisionFor(paneId: string, screen: string): number {
++    const entry = this.revisions.get(paneId);
++    if (entry === undefined) {
++      this.revisions.set(paneId, { revision: 1, lastScreen: screen });
++      return 1;
++    }
++    if (entry.lastScreen === screen) return entry.revision;
++    entry.revision += 1;
++    entry.lastScreen = screen;
++    return entry.revision;
++  }
++
++  private forgetGonePanes(snapshot: MuxSnapshot): void {
++    if (this.revisions.size === 0) return;
++    const live = new Set(snapshot.panes.map((pane) => pane.paneId));
++    for (const paneId of this.revisions.keys()) if (!live.has(paneId)) this.revisions.delete(paneId);
++  }
++}
++
++export const rexMuxFactory: MuxAdapterFactory = {
++  mux: REX_MUX,
++  create(target: MuxTarget) {
++    const binary = resolveRexBinary(target.options[REX_BINARY_OPTION] ?? "");
++    const dirs = claudePidRecordDirs((target.options[REX_CLAUDE_ROOTS_OPTION] ?? "").split("\n"), homedir());
++    const sessions = dirs.length > 0 ? new ClaudePidSessions(dirs) : undefined;
++    return new RexMux(new SpawnRexExec(binary, target.endpoint, target.timeoutMs || DEFAULT_REX_TIMEOUT_MS), sessions);
++  },
++  describeTarget(endpoint: string) {
++    return endpoint.trim() ? `socket ${endpoint.trim()}` : "its default socket";
++  },
++};
+diff --git a/bridge/mux/rex/exec.ts b/bridge/mux/rex/exec.ts
+new file mode 100644
+index 00000000..ccebde6c
+--- /dev/null
++++ b/bridge/mux/rex/exec.ts
+@@ -0,0 +1,165 @@
++import { existsSync } from "node:fs";
++import { isAbsolute } from "node:path";
++
++export interface RexRunResult {
++  readonly code: number;
++  readonly stdout: string;
++  readonly stderr: string;
++}
++
++export interface RexStreamHandlers {
++  onLine(line: string): void;
++  onExit(reason: string): void;
++}
++
++export interface RexStreamClient {
++  kill(): void;
++}
++
++export interface RexExec {
++  run(args: readonly string[], stdin?: string): Promise<RexRunResult>;
++  events(handlers: RexStreamHandlers): RexStreamClient;
++}
++
++export function rexBinaryCandidates(home: string = process.env.HOME ?? ""): readonly string[] {
++  const local = home.length > 0
++    ? [
++        `${home}/.local/bin/rex`,
++        `${home}/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex`,
++        `${home}/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex`,
++      ]
++    : [];
++  return [
++    ...local,
++    "/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex",
++    "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex",
++    "/opt/homebrew/bin/rex",
++    "/usr/local/bin/rex",
++    "/usr/bin/rex",
++  ];
++}
++
++export function resolveRexBinary(
++  configured: string,
++  exists: (path: string) => boolean = existsSync,
++  candidates: readonly string[] = rexBinaryCandidates(),
++): string | null {
++  const named = configured.trim();
++  if (named.length > 0) return isAbsolute(named) && exists(named) ? named : null;
++  return candidates.find((candidate) => exists(candidate)) ?? null;
++}
++
++export function defaultRexSocket(home: string): string {
++  return `${home}/Library/Application Support/rex/server.sock`;
++}
++
++export function rexServerArgs(endpoint: string): readonly string[] {
++  const socket = endpoint.trim();
++  return socket.length > 0 ? ["-S", `unix://${socket}`] : [];
++}
++
++export function isLocalEndpoint(endpoint: string): boolean {
++  const socket = endpoint.trim();
++  return socket.length === 0 || isAbsolute(socket);
++}
++
++export const NO_REX_BINARY = "no rex binary found — set COLLIE_REX_BIN to its absolute path";
++export const NOT_LOCAL_ENDPOINT = "the Rex endpoint must be the absolute path of a local socket";
++export const TIMED_OUT_CODE = 143;
++export const NO_BINARY_CODE = 127;
++export const KILL_GRACE_MS = 1000;
++
++export function timedOutMessage(args: readonly string[], timeoutMs: number): string {
++  const verb = args.filter((arg) => !arg.startsWith("-")).slice(0, 2).join(" ") || "the call";
++  return `rex did not answer \`${verb}\` within ${String(timeoutMs)}ms and was killed`;
++}
++
++export class SpawnRexExec implements RexExec {
++  private readonly unavailable: string | null;
++  private readonly command: readonly string[];
++
++  constructor(
++    binary: string | null,
++    endpoint: string,
++    private readonly timeoutMs: number,
++  ) {
++    this.unavailable = !isLocalEndpoint(endpoint) ? NOT_LOCAL_ENDPOINT : binary === null ? NO_REX_BINARY : null;
++    this.command = [binary ?? "", "--autostart=false", "--color", "never", ...rexServerArgs(endpoint)];
++  }
++
++  async run(args: readonly string[], stdin?: string): Promise<RexRunResult> {
++    if (this.unavailable !== null) return { code: NO_BINARY_CODE, stdout: "", stderr: this.unavailable };
++    const seconds = Math.max(1, Math.floor(this.timeoutMs / 1000) - 1);
++
++    const child = Bun.spawn([...this.command, "--timeout", `${String(seconds)}s`, ...args], {
++      stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
++      stdout: "pipe",
++      stderr: "pipe",
++    });
++
++    let killed = false;
++    let hardKill: ReturnType<typeof setTimeout> | null = null;
++    const timer = setTimeout(() => {
++      killed = true;
++      child.kill();
++      hardKill = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
++    }, this.timeoutMs);
++
++    try {
++      const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
++      const code = await child.exited;
++      if (killed) return { code: TIMED_OUT_CODE, stdout: "", stderr: timedOutMessage(args, this.timeoutMs) };
++      return { code, stdout, stderr };
++    } finally {
++      clearTimeout(timer);
++      if (hardKill !== null) clearTimeout(hardKill);
++    }
++  }
++
++  events(handlers: RexStreamHandlers): RexStreamClient {
++    const unavailable = this.unavailable;
++    if (unavailable !== null) {
++      queueMicrotask(() => handlers.onExit(unavailable));
++      return { kill: () => undefined };
++    }
++    const child = Bun.spawn([...this.command, "events", "--all", "--json"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
++
++    let ended = false;
++    const end = (reason: string): void => {
++      if (ended) return;
++      ended = true;
++      handlers.onExit(reason);
++    };
++
++    void (async () => {
++      try {
++        await pumpLines(child.stdout, handlers.onLine);
++        end("the rex event stream ended");
++      } catch (err) {
++        end(err instanceof Error ? err.message : String(err));
++      }
++    })();
++
++    return {
++      kill: () => {
++        child.kill();
++        end("closed");
++      },
++    };
++  }
++}
++
++async function pumpLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<void> {
++  const decoder = new TextDecoder();
++  let buffered = "";
++  for await (const chunk of stream) {
++    buffered += decoder.decode(chunk, { stream: true });
++    let cut = buffered.indexOf("\n");
++    while (cut >= 0) {
++      onLine(buffered.slice(0, cut).replace(/\r$/u, ""));
++      buffered = buffered.slice(cut + 1);
++      cut = buffered.indexOf("\n");
++    }
++  }
++  if (buffered.length > 0) onLine(buffered);
++}
+diff --git a/bridge/mux/rex/keys.ts b/bridge/mux/rex/keys.ts
+new file mode 100644
+index 00000000..c1b2affb
+--- /dev/null
++++ b/bridge/mux/rex/keys.ts
+@@ -0,0 +1,96 @@
++import { MUX_NAMED_KEYS, parseMuxKey, type MuxNamedKey } from "../keys.ts";
++
++const REX_NAMED_KEYS = {
++  Up: "up",
++  Down: "down",
++  Left: "left",
++  Right: "right",
++  Tab: "tab",
++  Enter: "enter",
++  Escape: "escape",
++  Space: "space",
++  Backspace: "backspace",
++  Delete: "delete",
++  Insert: "insert",
++  Home: "home",
++  End: "end",
++  PageUp: "pageup",
++  PageDown: "pagedown",
++  F1: "f1",
++  F2: "f2",
++  F3: "f3",
++  F4: "f4",
++  F5: "f5",
++  F6: "f6",
++  F7: "f7",
++  F8: "f8",
++  F9: "f9",
++  F10: "f10",
++  F11: "f11",
++  F12: "f12",
++} satisfies Record<MuxNamedKey, string>;
++
++const SHIFTED_US = new Map<string, string>([
++  ["~", "`"],
++  ["!", "1"],
++  ["@", "2"],
++  ["#", "3"],
++  ["$", "4"],
++  ["%", "5"],
++  ["^", "6"],
++  ["&", "7"],
++  ["*", "8"],
++  ["(", "9"],
++  [")", "0"],
++  ["_", "-"],
++  ["+", "="],
++  ["{", "["],
++  ["}", "]"],
++  ["|", "\\"],
++  [":", ";"],
++  ['"', "'"],
++  ["<", ","],
++  [">", "."],
++  ["?", "/"],
++]);
++
++const UNSHIFTED = /^[a-z0-9`\-=[\]\\;',./]$/u;
++
++export type RexKeyRejection = "unparsed" | "meta" | "character";
++
++export type RexKeyResult =
++  | { readonly ok: true; readonly key: string }
++  | { readonly ok: false; readonly reason: RexKeyRejection };
++
++export const REX_UNSENDABLE_KEYS: readonly MuxNamedKey[] = [];
++
++const _EVERY_UNSENDABLE_IS_A_NAMED_KEY: readonly (typeof MUX_NAMED_KEYS)[number][] = REX_UNSENDABLE_KEYS;
++void _EVERY_UNSENDABLE_IS_A_NAMED_KEY;
++
++const NAMED_BY_CONTRACT_SPELLING = new Map<string, string>(Object.entries(REX_NAMED_KEYS));
++
++function baseKey(key: string): { readonly key: string; readonly shift: boolean } | null {
++  const named = NAMED_BY_CONTRACT_SPELLING.get(key);
++  if (named !== undefined) return { key: named, shift: false };
++  if (key === " ") return { key: "space", shift: false };
++  if (UNSHIFTED.test(key)) return { key, shift: false };
++  if (/^[A-Z]$/u.test(key)) return { key: key.toLowerCase(), shift: true };
++  const shifted = SHIFTED_US.get(key);
++  if (shifted !== undefined) return { key: shifted, shift: true };
++  return null;
++}
++
++export function toRexKey(spelling: string): RexKeyResult {
++  const parsed = parseMuxKey(spelling);
++  if (parsed === null) return { ok: false, reason: "unparsed" };
++  if (parsed.modifiers.includes("meta")) return { ok: false, reason: "meta" };
++  const base = baseKey(parsed.key);
++  if (base === null) return { ok: false, reason: "character" };
++
++  const parts: string[] = [];
++  if (parsed.modifiers.includes("ctrl")) parts.push("ctrl");
++  if (parsed.modifiers.includes("alt")) parts.push("alt");
++  if (parsed.modifiers.includes("shift") || base.shift) parts.push("shift");
++  parts.push(base.key);
++  return { ok: true, key: parts.join("+") };
++}
+diff --git a/bridge/mux/rex/layout.ts b/bridge/mux/rex/layout.ts
+new file mode 100644
+index 00000000..cd35f08d
+--- /dev/null
++++ b/bridge/mux/rex/layout.ts
+@@ -0,0 +1,179 @@
++import { meaningfulTerminalTitle } from "../../activity.ts";
++import type { AgentSessionRef } from "../../journal/types.ts";
++import type { AgentStatus } from "../../types.ts";
++import { MUX_SHELL_AGENT } from "../agents.ts";
++import { agentForApp, agentStatus } from "../herdr-core/layout.ts";
++import type { MuxPane, MuxSnapshot, MuxSpace, MuxTab } from "../types.ts";
++import { TERMINAL_CREATOR, type RexBlock, type RexBlockInfo, type RexRawSnapshot, type RexStatusRecord, type RexWindow } from "./protocol.ts";
++
++type MutableMuxPane = { -readonly [K in keyof MuxPane]: MuxPane[K] };
++
++export interface PaneAgent {
++  readonly agent: string;
++  readonly status: AgentStatus;
++}
++
++export function reportedRecord(records: readonly RexStatusRecord[]): RexStatusRecord | null {
++  const root = records.find((record) => record.id === "");
++  if (root !== undefined) return root;
++  return records.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
++}
++
++export function paneAgent(info: RexBlockInfo | undefined): PaneAgent {
++  const record = reportedRecord(info?.records ?? []);
++  if (record !== null && record.app.trim() !== "") {
++    const reported = agentForApp(record.app);
++    if (reported === null) return { agent: MUX_SHELL_AGENT, status: "unknown" };
++    return { agent: reported, status: agentStatus(record.state) };
++  }
++  const running = agentForApp(info?.process?.foreground?.name ?? "");
++  if (running !== null) return { agent: running, status: "unknown" };
++  return { agent: MUX_SHELL_AGENT, status: "unknown" };
++}
++
++const PID_SESSION_AGENT = "claude";
++
++export function sessionPid(info: RexBlockInfo | undefined): number | null {
++  if (paneAgent(info).agent !== PID_SESSION_AGENT) return null;
++  const owner = reportedRecord(info?.records ?? [])?.ownerPid ?? 0;
++  const pid = owner > 0 ? owner : (info?.process?.foreground?.pid ?? 0);
++  return pid > 0 ? pid : null;
++}
++
++function idTail(id: string): string {
++  return id.slice(-8);
++}
++
++export function isDefaultWindowLabel(windowId: string, label: string): boolean {
++  return label === "" || label === `Window ${idTail(windowId)}`;
++}
++
++export function isDefaultBlockLabel(blockId: string, label: string): boolean {
++  return label === "" || label === "shell" || label === `Block ${idTail(blockId)}`;
++}
++
++function focusedSessions(raw: RexRawSnapshot): Set<string> {
++  const focused = new Set<string>();
++  for (const client of raw.clients) {
++    if (client.kind !== "app") continue;
++    if (client.state !== "" && client.state !== "connected") continue;
++    const only = client.sessionIds.length === 1 ? client.sessionIds[0] : undefined;
++    if (only !== undefined) focused.add(only);
++  }
++  return focused;
++}
++
++function publishedBlocks(window: RexWindow, hostId: string): RexBlock[] {
++  return window.blocks.filter((block) => block.creator === TERMINAL_CREATOR && (block.hostId === "" || block.hostId === hostId));
++}
++
++export function sessionPids(raw: RexRawSnapshot): Map<string, number> {
++  const pids = new Map<string, number>();
++  for (const session of raw.sessions) {
++    for (const window of session.windows) {
++      for (const block of publishedBlocks(window, raw.hostId)) {
++        const pid = sessionPid(session.blocks.get(block.blockId));
++        if (pid !== null) pids.set(block.blockId, pid);
++      }
++    }
++  }
++  return pids;
++}
++
++export function toSnapshot(raw: RexRawSnapshot, sessionRefs: ReadonlyMap<string, AgentSessionRef> = new Map()): MuxSnapshot {
++  const focused = focusedSessions(raw);
++  const spaces: MuxSpace[] = [];
++  const tabs: MuxTab[] = [];
++  const panes: MuxPane[] = [];
++
++  for (const session of raw.sessions) {
++    const spaceNumber = spaces.length + 1;
++    const spaceFocused = focused.has(session.sessionId);
++    const spaceTabs: MuxTab[] = [];
++    const spacePanes: MuxPane[] = [];
++
++    for (const window of session.windows) {
++      const blocks = publishedBlocks(window, raw.hostId);
++      if (blocks.length === 0) continue;
++      const number = spaceTabs.length + 1;
++      const named = !isDefaultWindowLabel(window.windowId, window.label);
++      const active = window.windowId === session.activeWindowId;
++      spaceTabs.push({
++        tabId: window.windowId,
++        spaceId: session.sessionId,
++        number,
++        label: named ? window.label : String(number),
++        focused: spaceFocused && active,
++        paneCount: blocks.length,
++      });
++      for (const block of blocks) {
++        const info = session.blocks.get(block.blockId);
++        const foreground = info?.process?.foreground ?? null;
++        const { agent, status } = paneAgent(info);
++        const pane: MutableMuxPane = {
++          paneId: block.blockId,
++          spaceId: session.sessionId,
++          spaceLabel: session.label,
++          spaceNumber,
++          tabId: window.windowId,
++          cwd: foreground?.cwd ?? "",
++          focused: spaceFocused && active && window.focusedBlockId === block.blockId,
++          alive: info?.process?.exited !== true,
++          agent,
++          status,
++        };
++        if (named) {
++          pane.tabLabel = window.label;
++          pane.tabNamed = true;
++        }
++        if (!isDefaultBlockLabel(block.blockId, block.label)) pane.paneLabel = block.label;
++        const title = meaningfulTerminalTitle(info?.title, undefined, agent, session.label);
++        if (title !== undefined) pane.terminalTitle = title;
++        if (foreground !== null && foreground.name !== "") pane.foregroundCommand = foreground.name;
++        const sessionRef = sessionRefs.get(block.blockId);
++        if (sessionRef !== undefined) pane.agentSession = sessionRef;
++        spacePanes.push(pane);
++      }
++    }
++
++    if (spacePanes.length === 0) continue;
++    const activeTab = spaceTabs.find((tab) => tab.tabId === session.activeWindowId) ?? spaceTabs[0];
++    spaces.push({
++      spaceId: session.sessionId,
++      number: spaceNumber,
++      label: session.label,
++      focused: spaceFocused,
++      activeTabId: activeTab?.tabId ?? "",
++      tabCount: spaceTabs.length,
++      paneCount: spacePanes.length,
++    });
++    tabs.push(...spaceTabs);
++    panes.push(...spacePanes);
++  }
++
++  return { panes, spaces, tabs };
++}
++
++// eslint-disable-next-line no-control-regex
++const ESCAPE = /\u001b(?:\[([0-9;:?<=>]*)([ -/]*)([@-~])|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[PX^_][^\u001b]*\u001b\\|[@-Z\\-_])/gu;
++
++function keepOrExpand(whole: string, params: string | undefined, intermediates: string | undefined, final: string | undefined): string {
++  if (final === "m" && !intermediates && params !== undefined && !/[?<=>]/u.test(params)) return whole;
++  if (final === "C" && !intermediates && params !== undefined && /^\d*$/u.test(params)) return " ".repeat(Math.max(1, Number(params || "1")));
++  return "";
++}
++
++export function normalizeGrid(content: string): string {
++  return content.replace(/\r\n/gu, "\n").replace(/\r/gu, "").replace(ESCAPE, keepOrExpand);
++}
++
++export interface GridRows {
++  readonly rows: readonly string[];
++  readonly cutAbove: boolean;
++}
++
++export function gridRows(content: string, start: number): GridRows {
++  const rows = normalizeGrid(content).replace(/\n$/u, "").split("\n");
++  if (start > 0 && rows.length > 0) return { rows: rows.slice(1), cutAbove: true };
++  return { rows, cutAbove: false };
++}
+diff --git a/bridge/mux/rex/logo.ts b/bridge/mux/rex/logo.ts
+new file mode 100644
+index 00000000..f8ca1180
+--- /dev/null
++++ b/bridge/mux/rex/logo.ts
+@@ -0,0 +1 @@
++export const REX_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#18181b"/><path d="M10 8h7.5a5.5 5.5 0 0 1 1.6 10.76L23 24h-3.6l-3.4-5H13.2v5H10zm3.2 3v5h4.3a2.5 2.5 0 0 0 0-5z" fill="#f4f4f5"/></svg>`;
+diff --git a/bridge/mux/rex/protocol.ts b/bridge/mux/rex/protocol.ts
+new file mode 100644
+index 00000000..a3c344bc
+--- /dev/null
++++ b/bridge/mux/rex/protocol.ts
+@@ -0,0 +1,455 @@
++import { asJsonNumber, asJsonObject, asJsonString, parseJson } from "../../../web/src/lib/json.ts";
++import type { JsonObject, JsonValue } from "../../json.ts";
++
++export const TERMINAL_CREATOR = "com.superlogical.terminal";
++
++export const MAX_WRITE_JSON_BYTES = 64 * 1024 - 1024;
++
++export const MAX_LABEL_CHARS = 128;
++
++export const REX_PROGRAM = String.raw`
++local A = rex.json.decode(ARGS)
++local function list(t) return t or {} end
++local function try(method, args)
++  local result, err = rex.call(method, args)
++  if result == nil then return nil, tostring(err) end
++  return result
++end
++local function attach()
++  return try("session.attach_all", { event_scope = "session" })
++end
++local function locate(target)
++  local all, err = attach()
++  if not all then return nil, err end
++  for _, s in ipairs(list(all.sessions)) do
++    if s.session_id == target then return s.session_id end
++    local view = try("session.view", { session_id = s.session_id })
++    for _, w in ipairs(view and list(view.windows) or {}) do
++      if w.window_id == target then return s.session_id end
++      for _, l in ipairs(list(w.layers)) do
++        for _, b in ipairs(list(l.blocks)) do
++          if b.block_id == target then return s.session_id end
++        end
++      end
++    end
++  end
++  return nil, target .. " not found (status=404 code=not_found)"
++end
++local function method(session, block, name, args)
++  return try("block.method", { session_id = session, block_id = block, method = name, args = args or {} })
++end
++local function leading_replacements(data)
++  local count, at = 0, 1
++  while string.sub(data, at, at + 2) == "\239\191\189" do
++    count = count + 1
++    at = at + 3
++  end
++  return count
++end
++local ops = {}
++function ops.snapshot()
++  local status, err = try("server.status", {})
++  if not status then return nil, err end
++  local clients, clients_err = try("client.list", { kinds = { "app" } })
++  local all, all_err = attach()
++  if not all then return nil, all_err end
++  local out = { host_id = status.host_id, clients = clients and clients.clients or {}, clients_error = clients_err, sessions = {} }
++  for _, s in ipairs(list(all.sessions)) do
++    local view, view_err = try("session.view", { session_id = s.session_id })
++    local entry = { session_id = s.session_id, label = s.label, view = view, error = view_err, blocks = {} }
++    for _, w in ipairs(view and list(view.windows) or {}) do
++      for _, l in ipairs(list(w.layers)) do
++        for _, b in ipairs(list(l.blocks)) do
++          if b.creator_name == A.terminal then
++            local probe = {}
++            for _, name in ipairs({ "process", "title", "program_status" }) do
++              local r, e = method(s.session_id, b.block_id, name)
++              probe[name] = r
++              if e then probe[name .. "_error"] = e end
++            end
++            entry.blocks[b.block_id] = probe
++          end
++        end
++      end
++    end
++    table.insert(out.sessions, entry)
++  end
++  return out
++end
++function ops.census()
++  local clients = try("client.list", { kinds = { "app" } })
++  local all, err = attach()
++  if not all then return nil, err end
++  local out = { clients = clients and clients.clients or {}, sessions = {} }
++  for _, s in ipairs(list(all.sessions)) do
++    local view = try("session.view", { session_id = s.session_id })
++    table.insert(out.sessions, { session_id = s.session_id, label = s.label, revision = view and view.revision, active = view and view.active_window_id })
++  end
++  return out
++end
++function ops.tail()
++  local session, err = locate(A.block)
++  if not session then return nil, err end
++  local size = method(session, A.block, "size")
++  local head, head_err = method(session, A.block, "format", { format = A.format, max_bytes = 1 })
++  if not head then return nil, head_err end
++  local content, total, start = head.content, head.total or #head.content, 0
++  if head.id then
++    start = math.max(0, total - A.bytes)
++    local parts, offset, first = {}, start, true
++    while true do
++      local r, read_err = method(session, A.block, "blob_read", { id = head.id, offset = offset, max_bytes = 983040 })
++      if not r then return nil, read_err end
++      table.insert(parts, r.data)
++      local consumed = #r.data
++      if first then consumed = consumed - 2 * leading_replacements(r.data) end
++      first = false
++      offset = offset + consumed
++      if r.eof or consumed <= 0 then break end
++    end
++    content = table.concat(parts)
++  end
++  return { content = content, total = total, start = start, rows = size and size.rows or 0 }
++end
++function ops.process()
++  local session, err = locate(A.block)
++  if not session then return nil, err end
++  return method(session, A.block, "process")
++end
++function ops.write()
++  local session, err = locate(A.block)
++  if not session then return nil, err end
++  if A.paste then
++    return try("block.event", { session_id = session, block_id = A.block, event = { type = "paste", payload = { text = A.text } } })
++  end
++  return method(session, A.block, "write", { data = A.text })
++end
++function ops.label_block()
++  local session, err = locate(A.block)
++  if not session then return nil, err end
++  return try("session.set_block_label", { session_id = session, block_id = A.block, label = A.label })
++end
++function ops.label_window()
++  local session, err = locate(A.window)
++  if not session then return nil, err end
++  return try("session.set_window_label", { session_id = session, window_id = A.window, label = A.label })
++end
++function ops.close_block()
++  local session, err = locate(A.block)
++  if not session then return nil, err end
++  return try("block.close", { session_id = session, block_id = A.block })
++end
++function ops.close_window()
++  local session, err = locate(A.window)
++  if not session then return nil, err end
++  return try("session.close_window", { session_id = session, window_id = A.window })
++end
++local op = ops[A.op]
++local value, err
++if op then value, err = op() else err = "unknown op " .. tostring(A.op) end
++print(rex.json.encode({ ok = value ~= nil, value = value, error = err }))
++`;
++
++export type RexOp =
++  | { readonly op: "snapshot" }
++  | { readonly op: "census" }
++  | { readonly op: "tail"; readonly block: string; readonly format: "vt" | "text"; readonly bytes: number }
++  | { readonly op: "process"; readonly block: string }
++  | { readonly op: "write"; readonly block: string; readonly text: string; readonly paste: boolean }
++  | { readonly op: "label_block"; readonly block: string; readonly label: string }
++  | { readonly op: "label_window"; readonly window: string; readonly label: string }
++  | { readonly op: "close_block"; readonly block: string }
++  | { readonly op: "close_window"; readonly window: string };
++
++function asObject(value: JsonValue | undefined): JsonObject {
++  return asJsonObject(value) ?? {};
++}
++
++function asArray(value: JsonValue | undefined): JsonValue[] {
++  return Array.isArray(value) ? value : [];
++}
++
++function strings(value: JsonValue | undefined): string[] {
++  return asArray(value).flatMap((item) => asJsonString(item) ?? []);
++}
++
++function str(record: JsonObject, key: string): string {
++  return asJsonString(record[key]) ?? "";
++}
++
++function maybeNum(record: JsonObject, key: string): number | null {
++  const value = asJsonNumber(record[key]);
++  return value !== undefined && Number.isFinite(value) ? value : null;
++}
++
++function num(record: JsonObject, key: string): number {
++  return maybeNum(record, key) ?? 0;
++}
++
++function bracketLevel(payload: string): string {
++  let level = "";
++  while (payload.includes(`]${level}]`)) level += "=";
++  return level;
++}
++
++export function rexScript(op: RexOp): string {
++  const payload = JSON.stringify({ ...op, terminal: TERMINAL_CREATOR });
++  const level = bracketLevel(payload);
++  return `local ARGS = [${level}[${payload}]${level}]\n${REX_PROGRAM}`;
++}
++
++export type RexAnswer = { readonly ok: true; readonly value: JsonValue } | { readonly ok: false; readonly error: string };
++
++export function parseAnswer(stdout: string): RexAnswer | null {
++  const line = stdout.trim().split("\n").at(-1) ?? "";
++  const parsed = parseJson(line);
++  if (parsed === undefined) return null;
++  const answer = asObject(parsed);
++  if (answer.ok === true) return { ok: true, value: answer.value ?? null };
++  return { ok: false, error: str(answer, "error") || "Rex answered without a value" };
++}
++
++export function errorCode(message: string): string | null {
++  return /\(status=\d+ code=([a-z_]+)\)/u.exec(message)?.[1] ?? null;
++}
++
++export interface RexProcessEntry {
++  readonly pid: number;
++  readonly name: string;
++  readonly argv0: string;
++  readonly script: string;
++  readonly cwd: string;
++}
++
++export interface RexProcess {
++  readonly foreground: RexProcessEntry | null;
++  readonly ancestors: readonly RexProcessEntry[];
++  readonly exited: boolean;
++}
++
++export interface RexStatusRecord {
++  readonly id: string;
++  readonly state: string;
++  readonly app: string;
++  readonly updatedAt: string;
++  readonly ownerPid: number;
++}
++
++export interface RexBlockInfo {
++  readonly process: RexProcess | null;
++  readonly title: string;
++  readonly records: readonly RexStatusRecord[];
++}
++
++export interface RexBlock {
++  readonly blockId: string;
++  readonly creator: string;
++  readonly hostId: string;
++  readonly label: string;
++}
++
++export interface RexWindow {
++  readonly windowId: string;
++  readonly label: string;
++  readonly focusedBlockId: string;
++  readonly blocks: readonly RexBlock[];
++}
++
++export interface RexSessionView {
++  readonly sessionId: string;
++  readonly label: string;
++  readonly activeWindowId: string;
++  readonly windows: readonly RexWindow[];
++  readonly blocks: ReadonlyMap<string, RexBlockInfo>;
++}
++
++export interface RexClient {
++  readonly clientId: string;
++  readonly kind: string;
++  readonly sessionIds: readonly string[];
++  readonly state: string;
++}
++
++export interface RexRawSnapshot {
++  readonly hostId: string;
++  readonly clients: readonly RexClient[];
++  readonly sessions: readonly RexSessionView[];
++}
++
++export interface RexCensusSession {
++  readonly sessionId: string;
++  readonly label: string;
++  readonly revision: number | null;
++  readonly active: string;
++}
++
++export interface RexCensus {
++  readonly clients: readonly RexClient[];
++  readonly sessions: readonly RexCensusSession[];
++}
++
++export interface RexTail {
++  readonly content: string;
++  readonly total: number;
++  readonly start: number;
++  readonly rows: number;
++}
++
++export interface RexCreatedWindow {
++  readonly windowId: string;
++  readonly blockIds: readonly string[];
++}
++
++function decodeEntry(value: JsonValue | undefined): RexProcessEntry | null {
++  if (value === null || value === undefined) return null;
++  const entry = asObject(value);
++  return { pid: num(entry, "pid"), name: str(entry, "name"), argv0: str(entry, "argv0"), script: str(entry, "script"), cwd: str(entry, "cwd") };
++}
++
++export function decodeProcess(value: JsonValue | undefined): RexProcess | null {
++  if (value === null || value === undefined) return null;
++  const process = asObject(value);
++  const ancestors: RexProcessEntry[] = [];
++  for (const raw of asArray(process.ancestors)) {
++    const entry = decodeEntry(raw);
++    if (entry !== null) ancestors.push(entry);
++  }
++  const lastExit = process.last_exit;
++  return { foreground: decodeEntry(process.foreground), ancestors, exited: lastExit !== undefined && lastExit !== null };
++}
++
++function decodeRecord(value: JsonValue): RexStatusRecord {
++  const record = asObject(value);
++  return {
++    id: str(record, "id"),
++    state: str(record, "state"),
++    app: str(record, "effective_app") || str(record, "app"),
++    updatedAt: str(record, "updated_at"),
++    ownerPid: num(asObject(record.owner), "pid"),
++  };
++}
++
++function decodeBlockInfo(value: JsonValue | undefined): RexBlockInfo {
++  const info = asObject(value);
++  return {
++    process: decodeProcess(info.process),
++    title: str(asObject(info.title), "title").trim(),
++    records: asArray(asObject(info.program_status).records).map(decodeRecord),
++  };
++}
++
++function decodeWindow(value: JsonValue): RexWindow {
++  const window = asObject(value);
++  const blocks: RexBlock[] = [];
++  for (const layer of asArray(window.layers)) {
++    for (const raw of asArray(asObject(layer).blocks)) {
++      const block = asObject(raw);
++      blocks.push({ blockId: str(block, "block_id"), creator: str(block, "creator_name"), hostId: str(block, "host_id"), label: str(block, "label") });
++    }
++  }
++  return { windowId: str(window, "window_id"), label: str(window, "label"), focusedBlockId: str(window, "focused_block_id"), blocks };
++}
++
++function decodeClient(value: JsonValue): RexClient {
++  const client = asObject(value);
++  return {
++    clientId: str(client, "client_id"),
++    kind: str(asObject(client.info), "kind"),
++    sessionIds: strings(client.session_ids),
++    state: str(client, "connection_state"),
++  };
++}
++
++export function decodeSnapshot(value: JsonValue): RexRawSnapshot {
++  const raw = asObject(value);
++  const sessions: RexSessionView[] = [];
++  for (const entry of asArray(raw.sessions)) {
++    const session = asObject(entry);
++    if (session.view === undefined || session.view === null) continue;
++    const view = asObject(session.view);
++    const blocks = new Map<string, RexBlockInfo>();
++    for (const [blockId, info] of Object.entries(asObject(session.blocks))) blocks.set(blockId, decodeBlockInfo(info));
++    sessions.push({
++      sessionId: str(session, "session_id"),
++      label: str(session, "label"),
++      activeWindowId: str(view, "active_window_id"),
++      windows: asArray(view.windows).map(decodeWindow),
++      blocks,
++    });
++  }
++  return { hostId: str(raw, "host_id"), clients: asArray(raw.clients).map(decodeClient), sessions };
++}
++
++export function decodeCensus(value: JsonValue): RexCensus {
++  const raw = asObject(value);
++  return {
++    clients: asArray(raw.clients).map(decodeClient),
++    sessions: asArray(raw.sessions).map((entry) => {
++      const session = asObject(entry);
++      return { sessionId: str(session, "session_id"), label: str(session, "label"), revision: maybeNum(session, "revision"), active: str(session, "active") };
++    }),
++  };
++}
++
++export function decodeTail(value: JsonValue): RexTail {
++  const raw = asObject(value);
++  return { content: str(raw, "content"), total: num(raw, "total"), start: num(raw, "start"), rows: num(raw, "rows") };
++}
++
++export function decodeCreatedWindow(stdout: string): RexCreatedWindow | null {
++  const raw = asObject(parseJson(stdout.trim()));
++  const windowId = str(raw, "window_id");
++  const blockIds = strings(raw.block_ids);
++  return windowId === "" || blockIds.length === 0 ? null : { windowId, blockIds };
++}
++
++export function censusSignature(census: RexCensus): string {
++  const parts = census.sessions.map((session) => `s:${session.sessionId}:${session.label}:${String(session.revision ?? "")}:${session.active}`);
++  for (const client of census.clients) {
++    if (client.kind === "app") parts.push(`c:${client.clientId}:${client.state}:${client.sessionIds.join(",")}`);
++  }
++  return parts.join(";");
++}
++
++export interface RexEvent {
++  readonly type: string;
++  readonly session: string;
++  readonly sessionEvent: string;
++  readonly block: string;
++  readonly creator: string;
++  readonly blockEvent: string;
++  readonly clientId: string;
++  readonly clientKind: string;
++  readonly revision: number | null;
++  readonly record: RexStatusRecord | null;
++  readonly foreground: RexProcessEntry | null;
++}
++
++export function parseEvent(line: string): RexEvent | null {
++  const parsed = parseJson(line);
++  if (parsed === undefined) return null;
++  const top = asObject(parsed);
++  const type = str(top, "type");
++  if (type === "") return null;
++  const payload = asObject(top.payload);
++  const client = asObject(payload.client);
++  const inner = type === "session_event" ? asObject(payload.event) : {};
++  const innerPayload = asObject(inner.payload);
++  const isBlock = str(inner, "type") === "block_event";
++  const blockPayload = isBlock ? asObject(innerPayload.payload) : {};
++  const record = blockPayload.record === undefined ? null : decodeRecord(blockPayload.record);
++  const foreground = isBlock && str(innerPayload, "name") === "process_changed" ? decodeEntry(blockPayload.foreground) : null;
++  return {
++    type,
++    session: str(payload, "session_id"),
++    sessionEvent: str(inner, "type"),
++    block: isBlock ? str(innerPayload, "block_id") : "",
++    creator: isBlock ? str(innerPayload, "creator_name") : "",
++    blockEvent: isBlock ? str(innerPayload, "name") : "",
++    clientId: str(client, "client_id") || str(payload, "client_id") || str(innerPayload, "client_id"),
++    clientKind: str(asObject(client.info), "kind"),
++    revision: maybeNum(innerPayload, "revision"),
++    record,
++    foreground,
++  };
++}
+diff --git a/bridge/mux/rex/refusal.ts b/bridge/mux/rex/refusal.ts
+new file mode 100644
+index 00000000..2f15494d
+--- /dev/null
++++ b/bridge/mux/rex/refusal.ts
+@@ -0,0 +1,34 @@
++import { muxGone, muxRefused, muxUnconfirmed, muxUnreachable, type MuxRefusalOutcome } from "../types.ts";
++import { NO_BINARY_CODE, TIMED_OUT_CODE } from "./exec.ts";
++import { errorCode } from "./protocol.ts";
++
++export const NO_SERVER_CODE = 4;
++export const TARGET_NOT_FOUND_CODE = 3;
++
++const TRANSPORT_WORDS = /no Rex server is running|connecting to Rex server|connection refused|operation not permitted|broken pipe|unexpected EOF|use of closed network connection|stream is closed/iu;
++
++export function saysUnreachable(code: number, stderr: string): boolean {
++  if (code === NO_BINARY_CODE || code === TIMED_OUT_CODE || code === NO_SERVER_CODE) return true;
++  return TRANSPORT_WORDS.test(stderr);
++}
++
++export function saysGone(text: string): boolean {
++  const code = errorCode(text);
++  if (code !== null) return code === "not_found" || code === "session_not_found";
++  return /target "[^"]*" not found/u.test(text);
++}
++
++export function refusalForRun(code: number, stderr: string, opts: { readonly write?: boolean } = {}): MuxRefusalOutcome {
++  const detail = stderr.trim() || `rex exited ${String(code)}`;
++  if (code === TIMED_OUT_CODE && opts.write === true) return muxUnconfirmed(detail);
++  if (saysUnreachable(code, stderr)) return muxUnreachable(detail);
++  if (code === TARGET_NOT_FOUND_CODE || saysGone(stderr)) return muxGone(detail);
++  return muxRefused(detail);
++}
++
++export function refusalForAnswer(error: string, opts: { readonly write?: boolean } = {}): MuxRefusalOutcome {
++  if (errorCode(error) === "timeout" && opts.write === true) return muxUnconfirmed(error);
++  if (saysGone(error)) return muxGone(error);
++  if (TRANSPORT_WORDS.test(error)) return muxUnreachable(error);
++  return muxRefused(error);
++}
+diff --git a/bridge/mux/rex/watch.ts b/bridge/mux/rex/watch.ts
+new file mode 100644
+index 00000000..5783981c
+--- /dev/null
++++ b/bridge/mux/rex/watch.ts
+@@ -0,0 +1,227 @@
++import { agentForApp, agentStatus } from "../herdr-core/layout.ts";
++import type { MuxSubscription, MuxWatchOptions } from "../types.ts";
++import type { RexExec, RexStreamClient } from "./exec.ts";
++import { censusSignature, decodeCensus, parseAnswer, parseEvent, rexScript, TERMINAL_CREATOR, type RexEvent } from "./protocol.ts";
++import { TIMED_OUT_CODE } from "./exec.ts";
++import { saysUnreachable } from "./refusal.ts";
++
++export const RESYNC_MS = 5000;
++export const RESYNC_IDLE_MS = 60_000;
++
++export type WatchTimer = ReturnType<typeof setTimeout>;
++
++export interface WatchClock {
++  setInterval(fn: () => void, ms: number): WatchTimer;
++  clearInterval(handle: WatchTimer): void;
++}
++
++export const REAL_CLOCK: WatchClock = {
++  setInterval: (fn, ms) => {
++    const handle = setInterval(fn, ms);
++    handle.unref();
++    return handle;
++  },
++  clearInterval: (handle) => clearInterval(handle),
++};
++
++const TOPOLOGY_SERVER_EVENTS: ReadonlySet<string> = new Set(["session_created", "session_destroyed", "session_moved", "session_label_changed"]);
++
++const TOPOLOGY_SESSION_EVENTS: ReadonlySet<string> = new Set([
++  "window_created",
++  "window_closed",
++  "window_moved",
++  "window_label_changed",
++  "block_created",
++  "block_closed",
++  "block_moved",
++  "block_detached",
++  "block_label_changed",
++  "layer_created",
++  "layer_closed",
++  "active_window_changed",
++  "session_label_changed",
++  "creator_changed",
++]);
++
++const PANE_ONLY_BLOCK_EVENTS: ReadonlySet<string> = new Set(["bell", "desktop_notification"]);
++
++const SNAPSHOT_BLOCK_EVENTS: ReadonlySet<string> = new Set(["title_changed", "pwd_changed", "child_exited"]);
++
++function statusKey(event: RexEvent): string {
++  if (event.blockEvent === "program_status_removed" || event.record === null) return "removed";
++  const agent = agentForApp(event.record.app) ?? "";
++  return `${agent}|${agent === "" ? "" : agentStatus(event.record.state)}`;
++}
++
++function processKey(event: RexEvent): string {
++  const foreground = event.foreground;
++  return foreground === null ? "" : `${String(foreground.pid)}|${foreground.name}|${foreground.cwd}`;
++}
++
++export class RexWatch implements MuxSubscription {
++  private client: RexStreamClient | null = null;
++  private timer: WatchTimer | null = null;
++  private closed = false;
++  private up = false;
++  private syncing = false;
++  private lastCensus: string | null = null;
++  private idleTicks = 0;
++  private readonly watched: ReadonlySet<string>;
++  private readonly apps = new Set<string>();
++  private readonly statuses = new Map<string, string>();
++  private readonly processes = new Map<string, string>();
++  private readonly views = new Map<string, number>();
++
++  constructor(
++    private readonly exec: RexExec,
++    private readonly options: MuxWatchOptions,
++    private readonly clock: WatchClock = REAL_CLOCK,
++  ) {
++    this.watched = new Set(options.panes);
++    this.start();
++  }
++
++  private start(): void {
++    this.client = this.exec.events({
++      onLine: (line) => this.handleLine(line),
++      onExit: (reason) => this.end(reason),
++    });
++    if (this.closed) {
++      this.client.kill();
++      this.client = null;
++      return;
++    }
++    this.timer = this.clock.setInterval(() => this.tick(), RESYNC_MS);
++    void this.census();
++  }
++
++  private handleLine(line: string): void {
++    if (this.closed) return;
++    const event = parseEvent(line);
++    if (event !== null) this.route(event);
++  }
++
++  private route(event: RexEvent): void {
++    if (event.type === "client_joined") {
++      if (event.clientKind !== "app") return;
++      this.apps.add(event.clientId);
++      this.options.onTopologyChange();
++      return;
++    }
++    if (event.type === "client_left" || event.type === "client_changed") {
++      if (!this.apps.has(event.clientId)) return;
++      if (event.type === "client_left") this.apps.delete(event.clientId);
++      this.options.onTopologyChange();
++      return;
++    }
++    if (TOPOLOGY_SERVER_EVENTS.has(event.type)) {
++      this.options.onTopologyChange();
++      return;
++    }
++    if (event.type !== "session_event") return;
++    this.routeSession(event);
++  }
++
++  private routeSession(event: RexEvent): void {
++    const kind = event.sessionEvent;
++    if (kind === "client_connected" || kind === "client_disconnected") {
++      if (this.apps.has(event.clientId)) this.options.onTopologyChange();
++      return;
++    }
++    if (kind === "session_view_changed") {
++      const seen = this.views.get(event.session);
++      if (event.revision !== null && seen !== undefined && event.revision <= seen) return;
++      if (event.revision !== null) this.views.set(event.session, event.revision);
++      this.options.onTopologyChange();
++      return;
++    }
++    if (TOPOLOGY_SESSION_EVENTS.has(kind)) {
++      this.options.onTopologyChange();
++      return;
++    }
++    if (kind === "block_event" && event.creator === TERMINAL_CREATOR && event.block !== "") this.routeBlock(event);
++  }
++
++  private routeBlock(event: RexEvent): void {
++    const block = event.block;
++    const name = event.blockEvent;
++    if (PANE_ONLY_BLOCK_EVENTS.has(name)) {
++      this.pane(block);
++      return;
++    }
++    if (SNAPSHOT_BLOCK_EVENTS.has(name)) {
++      this.changed(block);
++      return;
++    }
++    if (name === "program_status_changed" || name === "program_status_removed") {
++      this.changedOnce(this.statuses, block, statusKey(event));
++      return;
++    }
++    if (name === "process_changed") this.changedOnce(this.processes, block, processKey(event));
++  }
++
++  private changedOnce(seen: Map<string, string>, block: string, key: string): void {
++    if (seen.get(block) === key) return;
++    seen.set(block, key);
++    this.changed(block);
++  }
++
++  private changed(block: string): void {
++    this.options.onTopologyChange();
++    this.pane(block);
++  }
++
++  private pane(block: string): void {
++    if (this.watched.has(block)) this.options.onPaneChange(block);
++  }
++
++  private tick(): void {
++    if (this.options.attention?.() !== "watched" && ++this.idleTicks * RESYNC_MS < RESYNC_IDLE_MS) return;
++    this.idleTicks = 0;
++    void this.census();
++  }
++
++  private async census(): Promise<void> {
++    if (this.closed || this.syncing) return;
++    this.syncing = true;
++    try {
++      const res = await this.exec.run(["do", "-"], rexScript({ op: "census" }));
++      if (this.closed) return;
++      const answer = res.code === 0 ? parseAnswer(res.stdout) : null;
++      if (answer === null || !answer.ok) {
++        const detail = answer !== null && !answer.ok ? answer.error : res.stderr.trim() || `rex exited ${String(res.code)}`;
++        const slow = this.up && res.code === TIMED_OUT_CODE;
++        if (!this.up || (!slow && saysUnreachable(res.code, res.stderr))) this.end(detail);
++        return;
++      }
++      const signature = censusSignature(decodeCensus(answer.value));
++      if (!this.up) {
++        this.up = true;
++        this.options.onUp();
++      }
++      if (this.lastCensus !== null && this.lastCensus !== signature) this.options.onTopologyChange();
++      this.lastCensus = signature;
++    } catch {
++      return;
++    } finally {
++      this.syncing = false;
++    }
++  }
++
++  private end(reason: string): void {
++    if (this.closed) return;
++    this.closed = true;
++    if (this.timer !== null) {
++      this.clock.clearInterval(this.timer);
++      this.timer = null;
++    }
++    const client = this.client;
++    this.client = null;
++    client?.kill();
++    this.options.onDown(reason);
++  }
++
++  close(): void {
++    this.end("closed");
++  }
++}
+diff --git a/bridge/state-engine.ts b/bridge/state-engine.ts
+index 2b5856b1..7a6db92d 100644
+--- a/bridge/state-engine.ts
++++ b/bridge/state-engine.ts
+@@ -319,6 +319,8 @@ export interface EngineSnapshot {
+  */
+ export const ATTENTION_WINDOW_MS = 10_000;
+ 
++export const UNWATCHED_POLL_MS = 60_000;
++
+ /**
+  * The user-given name of the Muse session running in a pane, read out of Muse's own journal
+  * (bridge/journal/muse.ts `museSessionNameReader`) — Muse paints no session name for the grid
+@@ -409,14 +411,20 @@ export class StateEngine {
+   // The screen's ask, when the bridge reads screens (see liftScreenAsks). Absent: the mux's status
+   // stands as reported.
+   private screenAsk: ScreenAsk | undefined;
++  private readonly unwatchedPollMs: number | undefined;
+   constructor(
+     private readonly mux: MuxAdapter,
+     private readonly pollMs: number,
+-    opts: { museSessionName?: MuseSessionNameProbe } = {},
++    opts: { museSessionName?: MuseSessionNameProbe; unwatchedPollMs?: number } = {},
+   ) {
+     this.cadenceMs = pollMs;
+     this.baseCadenceMs = pollMs;
+     this.museNameProbe = opts.museSessionName;
++    this.unwatchedPollMs = opts.unwatchedPollMs;
++  }
++
++  unwatched(): boolean {
++    return this.unwatchedPollMs !== undefined && this.attention() === "idle";
+   }
+ 
+   /**
+@@ -474,7 +482,11 @@ export class StateEngine {
+    * census running fast forever.
+    */
+   noteAttention(now = Date.now()): void {
++    const returning = this.attention(now) === "idle";
+     this.lastReadAt = now;
++    if (!returning || !this.started) return;
++    this.applyCadence(this.effectiveCadence());
++    this.pokeNow();
+   }
+ 
+   /**
+@@ -575,7 +587,9 @@ export class StateEngine {
+ 
+   /** The watch's cadence, tightened to the fast one while an intent holds the engine hot. */
+   private effectiveCadence(): number {
+-    return this.hot() ? Math.min(this.pollMs, this.baseCadenceMs) : this.baseCadenceMs;
++    if (this.hot()) return Math.min(this.pollMs, this.baseCadenceMs);
++    if (this.unwatchedPollMs !== undefined && this.sawHerd && this.unwatched()) return Math.max(this.baseCadenceMs, this.unwatchedPollMs);
++    return this.baseCadenceMs;
+   }
+ 
+   /**
+@@ -832,7 +846,8 @@ export class StateEngine {
+     agents: AgentView[],
+     revisions: Map<string, number>,
+   ): Promise<void> {
+-    const claude = agents.filter((a) => a.agent === "claude");
++    const unwatched = this.unwatched();
++    const claude = agents.filter((a) => a.agent === "claude" && !(unwatched && this.prevStatus.get(a.paneId) === a.status));
+     const probe = this.museNameProbe;
+     const muse = probe === undefined ? [] : agents.filter((a) => a.agent === "muse");
+     if (claude.length === 0 && muse.length === 0) return;
+diff --git a/bridge/surface/shadow.ts b/bridge/surface/shadow.ts
+index 591cddcc..71dd4b06 100644
+--- a/bridge/surface/shadow.ts
++++ b/bridge/surface/shadow.ts
+@@ -263,9 +263,10 @@ export class SurfaceShadow {
+    * shadow mode is on), folds, compares, counts. The counters and the log line take a read once, by
+    * its revision and its text, so a screen that did not move is not counted twice. A poll that lands while the
+    * last one is still reading adds a tick to every pane instead, so a slow multiplexer shows as stale
+-   * and never as free. Never throws.
++   * and never as free. `shouldRead` narrows which panes are read, while every pane in `agents` keeps
++   * its state. Never throws.
+    */
+-  async observe(agents: readonly AgentView[]): Promise<void> {
++  async observe(agents: readonly AgentView[], shouldRead: (agent: AgentView) => boolean = () => true): Promise<void> {
+     const at = this.now();
+     if (this.observing) {
+       for (const state of this.panes.values()) {
+@@ -283,6 +284,7 @@ export class SurfaceShadow {
+         this.panes.delete(id);
+       }
+       for (const agent of agents) {
++        if (!shouldRead(agent)) continue;
+         try {
+           await this.readPane(agent, "poll");
+         } catch (err) {
+diff --git a/cli/doctor.ts b/cli/doctor.ts
+index cdbf48fc..d1ecf80e 100644
+--- a/cli/doctor.ts
++++ b/cli/doctor.ts
+@@ -24,6 +24,7 @@ import { TMUX_BINARY_OPTION } from "../bridge/mux/tmux/adapter.ts";
+ import { ZELLIJ_BINARY_OPTION } from "../bridge/mux/zellij/adapter.ts";
+ import { DURABLE_MUX } from "../bridge/mux/durable/adapter.ts";
+ import { HERDR_CORE_MUX } from "../bridge/mux/herdr-core/adapter.ts";
++import { REX_BINARY_OPTION } from "../bridge/mux/rex/adapter.ts";
+ import { TERN_BINARY_OPTION } from "../bridge/mux/tern/adapter.ts";
+ import { bindIsWildcard } from "../bridge/crew/config.ts";
+ import { deriveMode } from "../bridge/crew/mode.ts";
+@@ -1517,6 +1518,7 @@ function muxTarget(settings: MuxSettings): MuxTarget {
+       [TMUX_BINARY_OPTION]: settings.tmuxBin,
+       [ZELLIJ_BINARY_OPTION]: settings.zellijBin,
+       [TERN_BINARY_OPTION]: settings.ternBin,
++      [REX_BINARY_OPTION]: settings.rexBin,
+     },
+   };
+ }
+diff --git a/cli/mux-list.ts b/cli/mux-list.ts
+index 3257365d..c1e34713 100644
+--- a/cli/mux-list.ts
++++ b/cli/mux-list.ts
+@@ -3,6 +3,8 @@ import { HERDR_CORE_MUX, herdrCoreSocketFor } from "../bridge/mux/herdr-core/ada
+ import { HC_GENERATION, readHcCore, type HcCoreReading } from "../bridge/mux/herdr-core/client.ts";
+ import { DURABLE_MUX } from "../bridge/mux/durable/adapter.ts";
+ import { buildMuxRegistry, muxEndpointVar, muxNames } from "../bridge/mux/registry.ts";
++import { REX_MUX } from "../bridge/mux/rex/adapter.ts";
++import { defaultRexSocket, resolveRexBinary, rexBinaryCandidates } from "../bridge/mux/rex/exec.ts";
+ import { TERN_MUX } from "../bridge/mux/tern/adapter.ts";
+ import { defaultTernSocket, resolveTernBinary, ternBinaryCandidates } from "../bridge/mux/tern/exec.ts";
+ import { TMUX_MUX } from "../bridge/mux/tmux/adapter.ts";
+@@ -172,6 +174,14 @@ const probeTern: Probe = async (deps) => {
+   return binary === null ? absent() : absent(`${binary}, no daemon socket at ${socket}`);
+ };
+ 
++const probeRex: Probe = async (deps) => {
++  const named = (deps.ctx.env[muxEndpointVar(REX_MUX)] ?? "").trim();
++  const socket = named === "" ? defaultRexSocket(deps.ctx.home) : named;
++  if (deps.files.exists(socket)) return { present: true, answering: null, where: socket, version: null };
++  const binary = resolveRexBinary((deps.ctx.env.COLLIE_REX_BIN ?? "").trim(), (path) => deps.files.exists(path), rexBinaryCandidates(deps.ctx.home));
++  return binary === null ? absent() : absent(`${binary}, no server socket at ${socket}`);
++};
++
+ const probeTuios: Probe = async (deps) => {
+   const uid = deps.uid ?? process.getuid?.() ?? 1000;
+   const named = (deps.ctx.env[muxEndpointVar(TUIOS_MUX)] ?? "").trim();
+@@ -186,6 +196,7 @@ const PROBES: ReadonlyMap<string, Probe> = new Map([
+   [TMUX_MUX, probeTmux],
+   [ZELLIJ_MUX, probeZellij],
+   [TERN_MUX, probeTern],
++  [REX_MUX, probeRex],
+   [TUIOS_MUX, probeTuios],
+ ]);
+ 
+diff --git a/cli/setup-findings.ts b/cli/setup-findings.ts
+index 39bb8de8..5e4973aa 100644
+--- a/cli/setup-findings.ts
++++ b/cli/setup-findings.ts
+@@ -426,6 +426,7 @@ export interface MuxSettings {
+   readonly tmuxBin: string;
+   readonly zellijBin: string;
+   readonly ternBin: string;
++  readonly rexBin: string;
+   readonly origin: MuxOrigin;
+ }
+ 
+@@ -445,6 +446,7 @@ export function muxSettings(deps: MuxDeps): MuxSettings {
+   const tmuxBin = (env.COLLIE_TMUX_BIN ?? "").trim();
+   const zellijBin = (env.COLLIE_ZELLIJ_BIN ?? "").trim();
+   const ternBin = (env.COLLIE_TERN_BIN ?? "").trim();
++  const rexBin = (env.COLLIE_REX_BIN ?? "").trim();
+   const named = explicitMux(env);
+   if (named !== null) {
+     return {
+@@ -453,13 +455,14 @@ export function muxSettings(deps: MuxDeps): MuxSettings {
+       tmuxBin,
+       zellijBin,
+       ternBin,
++      rexBin,
+       origin: { kind: "explicit" },
+     };
+   }
+   const found = probeMuxes(deps);
+   const only = found.length === 1 ? found[0] : undefined;
+   if (only === undefined) {
+-    return { name: DEFAULT_MUX, endpoint: "", tmuxBin, zellijBin, ternBin, origin: { kind: "undecided", found } };
++    return { name: DEFAULT_MUX, endpoint: "", tmuxBin, zellijBin, ternBin, rexBin, origin: { kind: "undecided", found } };
+   }
+   return {
+     name: only.mux,
+@@ -467,6 +470,7 @@ export function muxSettings(deps: MuxDeps): MuxSettings {
+     tmuxBin,
+     zellijBin,
+     ternBin,
++    rexBin,
+     origin: { kind: "auto", evidence: only.evidence },
+   };
+ }

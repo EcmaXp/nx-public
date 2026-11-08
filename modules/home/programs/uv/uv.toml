@@ -1,0 +1,3 @@
+# https://docs.astral.sh/uv/concepts/configuration-files/
+
+exclude-newer = "1 week"
